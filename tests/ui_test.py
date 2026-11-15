@@ -542,6 +542,46 @@ def second_image_only_in_product_page_with_selectable_thumbnails(page, base):
     eq(modal_image(page), "P007-forest-green.svg")
 
 
+def swipe(page, selector, dx, dy=0):
+    """A real one-finger touch drag across the element's centre (Chrome DevTools touch events)."""
+    box = page.locator(selector).bounding_box()
+    x, y = box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
+    cdp = page.context.new_cdp_session(page)
+    cdp.send("Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": [{"x": x, "y": y}]})
+    for i in range(1, 6):
+        cdp.send("Input.dispatchTouchEvent", {"type": "touchMove", "touchPoints": [{"x": x + dx * i / 5, "y": y + dy * i / 5}]})
+    cdp.send("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []})
+    page.wait_for_timeout(50)
+
+
+@test
+def phone_swipe_switches_between_the_two_images(page, base):
+    phone = page.context.browser.new_context(viewport={"width": 390, "height": 844}, has_touch=True, is_mobile=True)
+    try:
+        page = phone.new_page()
+        fresh(page, base)
+        open_product(page, "P001")
+        eq(modal_image(page), "P001-red.svg", "starts on Image Link")
+        swipe(page, "#modal-image", -150)
+        eq(modal_image(page), "P001-red-back.svg", "swipe left → image 2")
+        eq(modal_thumbs(page), [["P001-red.svg", False], ["P001-red-back.svg", True]], "highlight follows the swipe")
+        swipe(page, "#modal-image", -150)
+        eq(modal_image(page), "P001-red-back.svg", "already on the last image")
+        swipe(page, "#modal-image", 150)
+        eq(modal_image(page), "P001-red.svg", "swipe right → image 1")
+        swipe(page, "#modal-image", -20)
+        eq(modal_image(page), "P001-red.svg", "a tiny drag is not a swipe")
+        swipe(page, "#modal-image", -60, 200)
+        eq(modal_image(page), "P001-red.svg", "a mostly vertical drag (scrolling) is not a swipe")
+        page.keyboard.press("Escape")
+        page.wait_for_selector("#product-modal:not([open])", state="attached")
+        open_product(page, "P007")   # no Image Link 2
+        swipe(page, "#modal-image", -150)
+        eq(modal_image(page), "P007-forest-green.svg", "nothing to swipe to without a second image")
+    finally:
+        phone.close()
+
+
 @test
 def cart_uses_first_image_even_after_viewing_second(page, base):
     fresh(page, base)

@@ -1108,6 +1108,23 @@
       state.modalImage = Number(thumb.getAttribute('data-image'));
       renderModalImage(state.current, L.findVariant(state.current, state.modalColor));
     });
+    // Touch screens: swipe the big image left for image 2, right for image 1.
+    var swipe = null;
+    el.modalImage.addEventListener('touchstart', function (e) {
+      swipe = e.touches.length === 1 ? { x: e.touches[0].clientX, y: e.touches[0].clientY } : null;
+    }, { passive: true });
+    el.modalImage.addEventListener('touchend', function (e) {
+      if (!swipe || !state.current || el.modalThumbs.hidden) return;
+      var dx = e.changedTouches[0].clientX - swipe.x;
+      var dy = e.changedTouches[0].clientY - swipe.y;
+      swipe = null;
+      if (Math.abs(dx) < 40 || Math.abs(dx) < Math.abs(dy) * 1.5) return;   // a tap or a vertical scroll
+      var next = dx < 0 ? 2 : 1;
+      if (next === state.modalImage) return;
+      state.modalImage = next;
+      renderModalImage(state.current, L.findVariant(state.current, state.modalColor));
+    }, { passive: true });
+    el.modalImage.addEventListener('touchcancel', function () { swipe = null; }, { passive: true });
     el.modalSizes.addEventListener('change', function (e) {
       if (e.target.name !== 'modal-size' || e.target.disabled) return;
       state.modalSize = e.target.value;
