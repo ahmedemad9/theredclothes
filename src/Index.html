@@ -227,7 +227,7 @@
     <div class="modal-inner">
       <button type="button" class="icon-button modal-close" id="modal-close" aria-label="Close product details">&times;</button>
       <div class="modal-media">
-        <img id="modal-image" alt="" width="600" height="750">
+        <img id="modal-image" alt="" width="600" height="750" tabindex="0" role="button" aria-label="Enlarge image">
         <span class="badge badge-out" id="modal-badge" hidden>Out of Stock</span>
                 <!-- Shown only when the colour has an "Image Link 2". -->
         <div class="modal-thumbs" id="modal-thumbs" role="group" aria-label="Product images" hidden>
@@ -264,6 +264,14 @@
         <button type="submit" class="btn btn-primary btn-block btn-lg" id="modal-add">Add to Cart</button>
         <p class="muted small" id="modal-stock-note" hidden></p>
       </form>
+    </div>
+  </dialog>
+
+  <!-- Enlarged product image over the product popup: click/tap or wheel/pinch to zoom; click outside to close. -->
+  <dialog class="lightbox" id="lightbox" aria-label="Enlarged product image">
+    <button type="button" class="icon-button lightbox-close" id="lightbox-close" aria-label="Close enlarged image">&times;</button>
+    <div class="lightbox-frame" id="lightbox-frame">
+      <img id="lightbox-image" alt="" draggable="false">
     </div>
   </dialog>
 
