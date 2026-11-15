@@ -250,6 +250,10 @@ h1, h2, h3 { line-height: 1.2; margin: 0 0 .5em; font-weight: 600; }
   transition: transform .15s ease; -webkit-user-drag: none;
 }
 .lightbox-frame.is-dragging img { transition: none; }
+.lightbox-frame img.slide-next { animation: lightbox-next .22s ease; }
+.lightbox-frame img.slide-prev { animation: lightbox-prev .22s ease; }
+@keyframes lightbox-next { from { opacity: 0; transform: translateX(25%); } }
+@keyframes lightbox-prev { from { opacity: 0; transform: translateX(-25%); } }
 .lightbox-close { position: absolute; top: 16px; right: 16px; background: rgba(255, 255, 255, .9); color: #121212; }
 
 /* ---------- Product modal ---------- */

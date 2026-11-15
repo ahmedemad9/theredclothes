@@ -625,14 +625,29 @@
     if (state.lastFocus && state.lastFocus.focus) state.lastFocus.focus();
   }
 
+  /**
+   * Shows the next (+1) or previous (-1) product image, wrapping around from the last
+   * to the first and back. Returns false when the colour has only one image.
+   */
+  function stepModalImage(direction) {
+    var v = state.current && L.findVariant(state.current, state.modalColor);
+    var count = v && v.imageUrl2 ? 2 : 1;
+    if (count < 2) return false;
+    state.modalImage = (state.modalImage - 1 + direction + count) % count + 1;
+    renderModalImage(state.current, v);
+    return true;
+  }
+
   /* ================================================================
    * Image zoom (lightbox): the shown product image enlarged over a blurred page.
    * Click/tap toggles zoom, the mouse wheel and pinch zoom gradually, drag pans
-   * when zoomed. Clicking outside the image (or Escape) returns to the product.
+   * when zoomed. Unzoomed, a sideways swipe or drag (or the arrow keys) switches
+   * images, wrapping around. Clicking outside the image (or Escape) returns to
+   * the product, which then shows the same image.
    * ================================================================ */
 
   var ZOOM_MAX = 4, ZOOM_TAP = 2.5;
-  var zoom = { scale: 1, x: 0, y: 0, pointers: {}, drag: null, pinch: null, moved: false };
+  var zoom = { scale: 1, x: 0, y: 0, pointers: {}, drag: null, pinch: null, moved: false, swipe: null };
 
   function openLightbox() {
     if (!state.current || !el.modalImage.getAttribute('src')) return;
@@ -641,6 +656,18 @@
     setZoom(1, 0, 0);
     if (typeof el.lightbox.showModal === 'function') el.lightbox.showModal();
     else el.lightbox.setAttribute('open', '');
+  }
+
+  /** Switches the enlarged image (and the product view behind it), sliding in from the swipe side. */
+  function swipeLightbox(direction) {
+    if (!stepModalImage(direction)) return;
+    var img = el.lightboxImage;
+    img.src = el.modalImage.getAttribute('src');
+    img.alt = el.modalImage.alt;
+    setZoom(1, 0, 0);
+    img.classList.remove('slide-next', 'slide-prev');
+    void img.offsetWidth;   // restart the animation
+    img.classList.add(direction > 0 ? 'slide-next' : 'slide-prev');
   }
 
   function closeLightbox() {
@@ -689,6 +716,7 @@
       zoom.pinch = { dist: Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y) || 1, scale: zoom.scale,
         qx: (mid.x - zoom.x) / zoom.scale, qy: (mid.y - zoom.y) / zoom.scale };
       zoom.moved = true;   // two fingers are never a tap
+      zoom.swipe = null;   // ...nor a swipe
     }
   }
 
@@ -705,7 +733,11 @@
     frame.addEventListener('pointerdown', function (e) {
       if (e.pointerType === 'mouse' && e.button !== 0) return;
       try { frame.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
-      if (!pointerList().length) zoom.moved = false;
+      if (!pointerList().length) {
+        zoom.moved = false;
+        // A gesture that starts unzoomed may be a swipe to the other image.
+        zoom.swipe = zoom.scale === 1 ? { x: e.clientX, y: e.clientY } : null;
+      }
       zoom.pointers[e.pointerId] = { x: e.clientX, y: e.clientY };
       startGesture();
     });
@@ -734,17 +766,30 @@
       frame.classList.remove('is-dragging');
       zoom.drag = null;
       zoom.pinch = null;
-      if (e.type === 'pointerup' && !zoom.moved) {   // a click or tap: toggle zoom at that point
+      var swipe = zoom.swipe;
+      zoom.swipe = null;
+      if (e.type !== 'pointerup') return;
+      if (!zoom.moved) {   // a click or tap: toggle zoom at that point
         if (zoom.scale > 1) setZoom(1, 0, 0);
         else zoomAt(ZOOM_TAP, e.clientX, e.clientY);
+      } else if (swipe && zoom.scale === 1) {
+        var dx = e.clientX - swipe.x, dy = e.clientY - swipe.y;
+        if (Math.abs(dx) >= 40 && Math.abs(dx) >= Math.abs(dy) * 1.5) swipeLightbox(dx < 0 ? 1 : -1);
       }
     }
+    // Every touch move here is ours (zoom, pan or swipe). Claiming it stops the browser
+    // treating it as a fling, which would swallow the next tap (e.g. on the halo).
+    frame.addEventListener('touchmove', function (e) { if (e.cancelable) e.preventDefault(); }, { passive: false });
     frame.addEventListener('pointerup', pointerEnd);
     frame.addEventListener('pointercancel', pointerEnd);
     frame.addEventListener('wheel', function (e) {
       e.preventDefault();
       zoomAt(zoom.scale * Math.exp(-e.deltaY * 0.0015), e.clientX, e.clientY);
     }, { passive: false });
+    el.lightbox.addEventListener('keydown', function (e) {
+      if (e.key === 'ArrowRight') { e.preventDefault(); swipeLightbox(1); }
+      else if (e.key === 'ArrowLeft') { e.preventDefault(); swipeLightbox(-1); }
+    });
     el.lightbox.addEventListener('close', function () {
       zoom.pointers = {};
       frame.classList.remove('is-dragging');
@@ -1236,7 +1281,7 @@
       state.modalImage = Number(thumb.getAttribute('data-image'));
       renderModalImage(state.current, L.findVariant(state.current, state.modalColor));
     });
-    // Touch screens: swipe the big image left for image 2, right for image 1.
+    // Touch screens: swipe the big image left for the next image, right for the previous (wraps around).
     var swipe = null;
     el.modalImage.addEventListener('touchstart', function (e) {
       swipe = e.touches.length === 1 ? { x: e.touches[0].clientX, y: e.touches[0].clientY } : null;
@@ -1254,10 +1299,7 @@
       var dy = e.changedTouches[0].clientY - swipe.y;
       swipe = null;
       if (Math.abs(dx) < 40 || Math.abs(dx) < Math.abs(dy) * 1.5) return;   // a tap or a vertical scroll
-      var next = dx < 0 ? 2 : 1;
-      if (next === state.modalImage) return;
-      state.modalImage = next;
-      renderModalImage(state.current, L.findVariant(state.current, state.modalColor));
+      stepModalImage(dx < 0 ? 1 : -1);
     }, { passive: true });
     el.modalImage.addEventListener('touchcancel', function () { swipe = null; }, { passive: true });
     bindLightbox();
