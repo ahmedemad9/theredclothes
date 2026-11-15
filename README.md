@@ -21,8 +21,8 @@ No servers, databases or paid services. Everything runs on your Google account.
 8. [How orders work](#how-orders-work)
 9. [Security, spam and abuse](#security-spam-and-abuse)
 10. [Migrating the Products tab](#migrating-the-products-tab)
-11. [Moving to a custom domain later](#moving-to-a-custom-domain-later)
-12. [Cross-origin limitations of Apps Script](#cross-origin-limitations-of-apps-script)
+11. [Cloudflare Pages frontend](#cloudflare-pages-frontend)
+12. [Calling the web app from elsewhere](#calling-the-web-app-from-elsewhere)
 13. [Automated tests and local preview](#automated-tests-and-local-preview)
 14. [Troubleshooting](#troubleshooting)
 15. [Known limitations](#known-limitations)
@@ -46,13 +46,15 @@ eyad_website/
 │   ├── Logic.html            StoreLogic: variants, cart, filters, money, form validation (no DOM, no Google APIs)
 │   ├── Api.html              StoreApi: the only file that talks to the backend (google.script.run)
 │   └── Scripts.html          the UI: rendering, modal, cart drawer, checkout, thank-you screen
-├── migration/
-│   └── api-adapter-fetch.js  drop-in StoreApi for static hosting later (fetch instead of google.script.run)
-├── tests/                    automated tests (run without a Google account); ui_test.py = browser tests
+├── cloudflare/               Cloudflare Pages site: Functions, fetch adapter, wrangler.toml (see CLOUDFLARE.md)
+├── tests/                    automated tests (run without a Google account); ui_test.py = browser tests,
+│                             tests/cloudflare/ = Pages Functions tests
 ├── assets/                   page background GIFs + still fallbacks (hosted elsewhere for the live site)
 ├── tools/build_preview.py    builds a local, clickable preview with mock data
 ├── tools/build_logo.py       makes src/Logo.html from the_red.jpeg
 ├── tools/build_backgrounds.py makes the still background images from the GIFs
+├── tools/build_cloudflare.py builds cloudflare/public/ (static site) from src/
+├── CLOUDFLARE.md             Cloudflare Pages deployment, environment variables, rollback
 ├── .clasp.json.example       for optional command-line deployment with clasp
 └── README.md
 ```
@@ -63,7 +65,7 @@ The frontend is split so it can move to another host later:
 |---|---|---|
 | Business rules (cart, filters, validation) | `Logic.html` | No |
 | UI | `Scripts.html` | No — only calls `StoreApi` |
-| Backend adapter | `Api.html` | **Yes** — swap this one file to change hosts |
+| Backend adapter | `Api.html` | **Yes** — the Cloudflare build uses `cloudflare/web/api.js` instead |
 
 ---
 
@@ -141,7 +143,7 @@ Leave the rest empty. The website appends one row per order. Don't rename or reo
    |---|---|---|
    | `NOTIFICATION_EMAIL` | Recommended | The address that should receive order emails. If missing, emails go to the account that owns the script. |
    | `SPREADSHEET_ID` | Only if the script is **not** bound to the spreadsheet | The long ID from the spreadsheet URL: `https://docs.google.com/spreadsheets/d/<THIS PART>/edit` |
-   | `WEBHOOK_SECRET` | Optional | Set it only if *server-side* integrations post orders to `doPost`. Leave it unset if a browser will call `doPost` (see [migration](#moving-to-a-custom-domain-later)). |
+   | `WEBHOOK_SECRET` | For the Cloudflare site | When set, `doPost` refuses orders without it. The Cloudflare Pages Functions send it server-side (same value as their `WEBHOOK_SECRET` secret, see [CLOUDFLARE.md](CLOUDFLARE.md)). The Apps Script website does not use `doPost`. |
 
 6. **Create or check the tabs**: in the editor, choose `setupSpreadsheet` in the function dropdown and click **Run**. The first run asks for authorization (see the note below). This function:
    - creates `Products` and `Orders` with the exact headers if they're missing (an empty first tab is reused as `Products`),
@@ -418,33 +420,25 @@ The current version needs **one row per product colour** ([Products tab](#produc
 
 Customers who had items in their cart before the change see them marked **"Please choose a colour"**. If a product has only one colour, the item is converted automatically. Otherwise the customer picks the colour (or removes the item) before checking out. The store never guesses a colour.
 
-## Moving to a custom domain later
+## Cloudflare Pages frontend
 
-Not needed now. When you're ready, the store is built for it:
+The same storefront can be served from Cloudflare Pages (first on a temporary `*.pages.dev` address), with this Apps Script project and spreadsheet staying the backend. Pages Functions call the web app server-side:
 
-1. Keep the Apps Script deployment as the **backend**. It already serves:
-   - `GET  <web app URL>?action=products` → catalog JSON
-   - `POST <web app URL>` with the order JSON as the body → same pipeline as the website
-2. Create a static `index.html` from `src/Index.html`:
-   - replace each `<?!= include('X'); ?>` with the contents of `src/X.html`,
-   - replace `<?!= configJson ?>` with a literal config object (same shape as `getPublicConfig_()` in `Config.gs`),
-   - replace `<?= storeName ?>` with your store name,
-   - **use `migration/api-adapter-fetch.js` instead of `Api.html`**, with `API_URL` set to your web app URL.
+- `GET /api/config` → `doGet?action=config`
+- `GET /api/products` → `doGet?action=products`
+- `POST /api/orders` → `doPost` (with `WEBHOOK_SECRET`)
 
-   `tools/build_preview.py` does the same flattening for the local preview and can serve as a starting point.
-3. Host that folder on Cloudflare Pages (or anywhere static) and point your domain at it.
+The frontend files are generated from `src/` by `tools/build_cloudflare.py`, so both sites stay identical. Setup, environment variables, deployment and rollback are in **[CLOUDFLARE.md](CLOUDFLARE.md)**.
 
-`Logic.html` (cart, filters, validation) and `Scripts.html` (UI) don't change: they only talk to `StoreApi`.
+### Calling the web app from elsewhere
 
-### Cross-origin limitations of Apps Script
+Things to know when anything other than the Apps Script page calls the `/exec` URL:
 
-These apply when a page on **another domain** calls the web app:
-
-- **No preflight support.** Apps Script can't answer `OPTIONS` requests. Send `POST` with `Content-Type: text/plain` (a "simple request") and put the JSON in the body; `doPost` parses `e.postData.contents`. Don't use `application/json` and don't add custom headers.
-- **Redirect.** Responses from `ContentService` are delivered via a 302 redirect to `script.googleusercontent.com`. `fetch` follows it by default, and that response allows any origin to read it, which is what makes the fetch adapter work.
-- **No status codes or headers.** The HTTP status is 200 even for failures, and `doPost` can't read request headers. Success and errors are carried in the JSON body (`success`, `code`).
-- **Access must be "Anyone".** Otherwise unauthenticated cross-site requests are redirected to a Google login page instead of reaching your script.
-- **Secrets in the browser aren't secret.** `WEBHOOK_SECRET` is for server-to-server integrations only. A static site calling `doPost` directly must leave it unset and relies on the same protections as the Apps Script-hosted site.
+- **Redirect.** Every response is a 302 to a one-time `script.googleusercontent.com` link that holds the output. By then the script has already run. Read the result with a GET and never re-send a POST. The Cloudflare Functions follow it by hand, and only to Google hosts.
+- **No status codes or headers.** The HTTP status is 200 even for failures, and `doPost` can't read request headers. Success and errors are in the JSON body (`success`, `code`). Google error and sign-in pages come back as HTML, so an answer that isn't JSON is never a success.
+- **Body format.** `doPost` reads `e.postData.contents`. Send JSON as `text/plain`.
+- **Access must be "Anyone".** Otherwise requests are redirected to a Google sign-in page.
+- **Secrets belong on servers.** `WEBHOOK_SECRET` must never be put in browser code. The Cloudflare site keeps it in a Cloudflare secret.
 - **Quotas still apply** (script runtime, simultaneous executions, email).
 
 ---
@@ -466,6 +460,13 @@ Without Node.js, with Python 3:
 ```bash
 python3 -m venv .venv && .venv/bin/pip install mini-racer
 .venv/bin/python tests/run_tests.py
+```
+
+The Cloudflare Pages Functions and their fetch adapter have their own tests (Node.js). They use the real `.gs` code behind a simulated Google redirect. The browser tests can also run against the Cloudflare build:
+
+```bash
+node --test tests/cloudflare/*.test.mjs
+.venv/bin/python tests/ui_test.py --cloudflare
 ```
 
 Coverage (78 tests): grouping rows by Product ID; string IDs; header-based columns; old-format and missing-header detection; inconsistent Name/Description/Price/Category; duplicate Product ID + Color; stock-cell parsing (1/0/empty/invalid); image link validation; product/colour/size availability; order validation by Product ID → colour → size; reservations never changing stock; Cart Items format; text order IDs with leading zeros; ID uniqueness; server-side pricing and price-tamper rejection; quantity and cart limits; customer validation; formula injection (including in product IDs and colours); idempotency; locking; rate limits; email content, escaping and failure handling; webhook; owner-only utilities; read-only migration preview; cart identity (Product ID + Color + Size), colour images, persistence, reconciliation; safe migration of old carts; filters and search; front/back validation parity; API adapter retries and timeouts.
@@ -525,3 +526,4 @@ This runs the real frontend **and** the real `.gs` backend in your browser again
 - **Totals are product subtotals.** Delivery is arranged by email, as stated on the checkout page and in the confirmation.
 - **Throughput.** Orders are processed one at a time under the lock, which is fine for a small shop (dozens of orders per minute). Apps Script also limits simultaneous executions per account.
 - **Sorting and pagination**: all products load at once, which is fine for a few hundred products.
+# theredclothes
