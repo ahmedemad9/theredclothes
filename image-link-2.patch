@@ -1,0 +1,189 @@
+--- a/src/Index.html
++++ b/src/Index.html
+@@ -229,6 +229,11 @@
+       <div class="modal-media">
+         <img id="modal-image" alt="" width="600" height="750">
+         <span class="badge badge-out" id="modal-badge" hidden>Out of Stock</span>
++        <!-- Shown only when the colour has an "Image Link 2". -->
++        <div class="modal-thumbs" id="modal-thumbs" role="group" aria-label="Product images" hidden>
++          <button type="button" class="modal-thumb" data-image="1" aria-label="Show image 1" aria-pressed="true"><img alt="" width="60" height="75"></button>
++          <button type="button" class="modal-thumb" data-image="2" aria-label="Show image 2" aria-pressed="false"><img alt="" width="60" height="75"></button>
++        </div>
+       </div>
+       <form class="modal-body" id="modal-form" novalidate>
+         <p class="modal-category" id="modal-category"></p>
+--- a/src/Logic.html
++++ b/src/Logic.html
+@@ -6,7 +6,7 @@
+  *
+  * Product shape (from getProducts):
+  *   { id, name, description, price, category, inStock,
+- *     variants: [{ color, imageUrl, sizes: { S: true, M: false, … } }] }
++ *     variants: [{ color, imageUrl, imageUrl2, sizes: { S: true, M: false, … } }] }
+  */
+ var StoreLogic = (function () {
+   'use strict';
+--- a/src/Products.gs
++++ b/src/Products.gs
+@@ -3,6 +3,7 @@
+  *
+  * Schema: one row per product + colour. Rows sharing a Product ID are one product.
+  *   Product ID | Name | Description | Price | Category | Color | Image Link | S | M | L | XL | XXL
++ * Optional: "Image Link 2" (a second picture of that colour, e.g. the back).
+  * Size cells: 1 = available, 0 or empty = unavailable. Columns are found by header name.
+  */
+ 
+@@ -13,7 +14,8 @@
+   PRICE: 'Price',
+   CATEGORY: 'Category',
+   COLOR: 'Color',
+-  IMAGE: 'Image Link'
++  IMAGE: 'Image Link',
++  IMAGE_2: 'Image Link 2'   // optional column
+ };
+ var SIZE_COLUMNS = ['S', 'M', 'L', 'XL', 'XXL'];
+ var PRODUCT_HEADERS_V2 = ['Product ID', 'Name', 'Description', 'Price', 'Category', 'Color', 'Image Link'].concat(SIZE_COLUMNS);
+@@ -91,6 +93,7 @@
+   }
+   var map = {};
+   PRODUCT_HEADERS_V2.forEach(function (h) { map[h] = index[headerKey_(h)]; });
++  map[PRODUCT_COLUMNS.IMAGE_2] = index[headerKey_(PRODUCT_COLUMNS.IMAGE_2)];   // undefined when the column is absent
+   return map;
+ }
+ 
+@@ -259,6 +262,11 @@
+     } else if (!rawImage) {
+       problems.push(label + ' row ' + r.rowNumber + ' (' + r.color + '): no Image Link — placeholder shown.');
+     }
++    var rawImage2 = col['Image Link 2'] === undefined ? '' : String(r.cells[col['Image Link 2']] || '').trim();
++    var imageUrl2 = normalizeImageUrl_(rawImage2);
++    if (rawImage2 && !imageUrl2) {
++      problems.push(label + ' row ' + r.rowNumber + ' (' + r.color + '): Image Link 2 is not a valid http(s) URL — second image skipped.');
++    }
+     var sizes = {};
+     SIZE_COLUMNS.forEach(function (s) {
+       var parsed = parseStockCell_(r.cells[col[s]]);
+@@ -268,7 +276,7 @@
+       }
+       sizes[s] = parsed.available;
+     });
+-    variants.push({ color: r.color, imageUrl: imageUrl, sizes: sizes });
++    variants.push({ color: r.color, imageUrl: imageUrl, imageUrl2: imageUrl2, sizes: sizes });
+   });
+ 
+   if (!variants.length) {
+--- a/src/Scripts.html
++++ b/src/Scripts.html
+@@ -29,6 +29,7 @@
+     current: null,       // product shown in the modal
+     modalColor: null,
+     modalSize: null,
++    modalImage: 1,       // 1 = Image Link, 2 = Image Link 2 (product page only)
+     resolvingKey: null,  // old-format cart line being replaced via "Choose colour"
+     submitting: false,
+     lastFocus: null
+@@ -44,6 +45,7 @@
+     drawer: $('cart-drawer'), cartItems: $('cart-items'), cartEmpty: $('cart-empty'), cartFoot: $('cart-foot'),
+     cartSubtotal: $('cart-subtotal'), cartNotices: $('cart-notices'), checkoutButton: $('checkout-button'),
+     modal: $('product-modal'), modalForm: $('modal-form'), modalImage: $('modal-image'), modalBadge: $('modal-badge'),
++    modalThumbs: $('modal-thumbs'),
+     modalTitle: $('modal-title'), modalCategory: $('modal-category'), modalPrice: $('modal-price'),
+     modalDescription: $('modal-description'), modalColors: $('modal-colors'), modalColorName: $('modal-color-name'),
+     modalColorNote: $('modal-color-note'), modalSizes: $('modal-sizes'), modalSizeError: $('modal-size-error'),
+@@ -490,6 +492,7 @@
+     var v = selectedVariant(p);
+     state.modalColor = v ? v.color : null;
+     state.modalSize = null;
++    state.modalImage = 1;
+ 
+     el.modalTitle.textContent = p.name;
+     el.modalCategory.textContent = p.category;
+@@ -508,6 +511,26 @@
+     (checked || $('modal-close')).focus();
+   }
+ 
++  /**
++   * The modal's main image plus, when the colour has an "Image Link 2", two
++   * thumbnails underneath: the one shown is highlighted, the other switches to it.
++   */
++  function renderModalImage(p, v) {
++    var second = (v && v.imageUrl2) || '';
++    if (!second) state.modalImage = 1;
++    var showSecond = state.modalImage === 2;
++    setImage(el.modalImage, showSecond ? second : v && v.imageUrl,
++      p.name + (v ? ' — ' + v.color : '') + (showSecond ? ' (image 2)' : ''));
++    el.modalImage.setAttribute('data-color', v ? v.color : '');
++    el.modalThumbs.hidden = !second;
++    if (!second) return;
++    Array.prototype.forEach.call(el.modalThumbs.querySelectorAll('.modal-thumb'), function (thumb) {
++      var n = Number(thumb.getAttribute('data-image'));
++      setImage(thumb.querySelector('img'), n === 2 ? second : v.imageUrl, '');
++      thumb.setAttribute('aria-pressed', String(n === state.modalImage));
++    });
++  }
++
+   /** Updates the modal for the selected colour: image, label, sizes, button state. */
+   function renderModalVariant() {
+     var p = state.current;
+@@ -515,8 +538,7 @@
+     var v = L.findVariant(p, state.modalColor);
+     var colorAvailable = L.isVariantAvailable(v);
+ 
+-    setImage(el.modalImage, v && v.imageUrl, p.name + (v ? ' — ' + v.color : ''));
+-    el.modalImage.setAttribute('data-color', v ? v.color : '');
++    renderModalImage(p, v);
+     el.modalBadge.hidden = colorAvailable;
+     el.modalColorName.textContent = v ? v.color : '';
+     el.modalColorNote.hidden = colorAvailable;
+@@ -575,6 +597,7 @@
+     var p = state.current;
+     var previousSize = state.modalSize;
+     state.modalColor = color;
++    state.modalImage = 1;   // a new colour starts on its main image
+     state.selectedColor[L.idKey(p.id)] = color;   // keep the card in sync with the modal
+     var v = L.findVariant(p, color);
+     var message = '';
+@@ -1079,6 +1102,12 @@
+     el.modal.addEventListener('close', onModalClosed);
+     el.modal.addEventListener('click', function (e) { if (e.target === el.modal) closeProduct(); }); // click on backdrop
+     el.modalColors.addEventListener('change', function (e) { if (e.target.name === 'modal-color') onModalColorChange(e.target.value); });
++    el.modalThumbs.addEventListener('click', function (e) {
++      var thumb = e.target.closest('.modal-thumb');
++      if (!thumb || !state.current) return;
++      state.modalImage = Number(thumb.getAttribute('data-image'));
++      renderModalImage(state.current, L.findVariant(state.current, state.modalColor));
++    });
+     el.modalSizes.addEventListener('change', function (e) {
+       if (e.target.name !== 'modal-size' || e.target.disabled) return;
+       state.modalSize = e.target.value;
+--- a/src/Styles.html
++++ b/src/Styles.html
+@@ -242,8 +242,17 @@
+ @keyframes pop { from { opacity: 0; transform: translateY(12px) scale(.98); } }
+ .modal-inner { display: grid; grid-template-columns: 1fr 1fr; position: relative; }
+ .modal-close { position: absolute; top: 10px; right: 10px; z-index: 2; background: rgba(255, 255, 255, .9); }
+-.modal-media { position: relative; background: var(--surface); }
+-.modal-media img { width: 100%; height: 100%; aspect-ratio: 4 / 5; object-fit: cover; }
++.modal-media { position: relative; display: flex; flex-direction: column; background: var(--surface); }
++.modal-media > img { flex: 1 1 auto; min-height: 0; width: 100%; aspect-ratio: 4 / 5; object-fit: cover; }
++.modal-thumbs { display: flex; gap: 10px; padding: 12px; background: var(--background); }
++.modal-thumb {
++  flex: none; width: 60px; height: 75px; padding: 0; overflow: hidden; cursor: pointer;
++  border: 2px solid var(--border); border-radius: var(--radius); background: var(--surface);
++  transition: border-color .15s, opacity .15s; opacity: .7;
++}
++.modal-thumb img { width: 100%; height: 100%; object-fit: cover; }
++.modal-thumb:hover { opacity: 1; }
++.modal-thumb[aria-pressed="true"] { border-color: var(--accent); opacity: 1; }
+ .modal-body { padding: 40px 36px; display: flex; flex-direction: column; }
+ .modal-category { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--text-secondary); margin: 0 0 6px; }
+ .modal-body h2 { font-size: 28px; margin: 0 0 8px; padding-right: 32px; }
+@@ -424,7 +433,7 @@
+ 
+   .modal { width: 100%; max-width: 100%; max-height: 100%; height: 100%; margin: 0; border-radius: 0; }
+   .modal-inner { grid-template-columns: minmax(0, 1fr); }
+-  .modal-media img { aspect-ratio: 1 / 1; max-height: 52vh; }
++  .modal-media > img { aspect-ratio: 1 / 1; max-height: 52vh; }
+   .modal-body { padding: 24px 16px 32px; }
+   .modal-body h2 { font-size: 22px; }
+ 

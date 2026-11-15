@@ -1,0 +1,10 @@
+[
+  {
+    "name": "Backend (Apps Script with mocked services)",
+    "files": ["tests/harness.js", "tests/gas-mocks.js", "src/Config.gs", "src/Products.gs", "src/Orders.gs", "src/Email.gs", "src/Code.gs", "tests/server.test.js"]
+  },
+  {
+    "name": "Frontend logic and API adapter",
+    "files": ["tests/harness.js", "tests/gas-mocks.js", "src/Config.gs", "src/Products.gs", "src/Orders.gs", "src/Logic.html", "src/Api.html", "tests/client.test.js"]
+  }
+]

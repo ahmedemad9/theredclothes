@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title><?= storeName ?> — Shop</title>
+  <script>window.STORE_CONFIG = <?!= configJson ?>;</script>
+  <?!= include('Styles'); ?>
+</head>
+<body>
+  <div class="site-bg" id="site-bg" aria-hidden="true"></div>
+  <a class="skip-link" href="#main">Skip to products</a>
+
+  <header class="site-header" id="top">
+    <div class="container header-inner">
+      <a class="logo" href="#shop" data-action="go-shop">
+        <?!= include('Logo'); ?>
+        <span class="logo-text" data-store-name><?= storeName ?></span>
+      </a>
+      <nav class="main-nav" aria-label="Main">
+        <ul id="nav-links"></ul>
+      </nav>
+      <button type="button" class="cart-button" id="cart-button" aria-label="Open cart" aria-controls="cart-drawer" aria-expanded="false">
+        <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path d="M6 7h12l-1 13H7L6 7Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M9 7V6a3 3 0 0 1 6 0v1" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>
+        <span class="cart-count" id="cart-count" aria-hidden="true">0</span>
+      </button>
+    </div>
+  </header>
+
+  <main id="main">
+    <!-- ======================= SHOP ======================= -->
+    <section class="view" id="view-shop" aria-labelledby="shop-title">
+      <div class="page-title" id="shop">
+        <div class="container">
+          <nav class="breadcrumb" aria-label="Breadcrumb"><a href="#shop" data-action="go-shop">Home</a><span aria-hidden="true">/</span><span>Shop</span></nav>
+          <h1 id="shop-title">Shop</h1>
+        </div>
+      </div>
+
+      <div class="container shop-layout">
+        <aside class="sidebar" id="filters" aria-label="Product filters">
+          <div class="sidebar-head">
+            <h2>Filters</h2>
+            <button type="button" class="icon-button" id="filters-close" aria-label="Close filters">&times;</button>
+          </div>
+
+          <div class="widget">
+            <h3 class="widget-title"><label for="search">Search</label></h3>
+            <div class="search-field">
+              <input type="search" id="search" placeholder="Search products…" autocomplete="off" maxlength="80">
+              <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><circle cx="11" cy="11" r="6.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="m16 16 4 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+            </div>
+          </div>
+
+          <fieldset class="widget">
+            <legend class="widget-title">Product categories</legend>
+            <ul class="category-list" id="category-list"></ul>
+          </fieldset>
+
+          <button type="button" class="btn btn-outline btn-block" id="reset-filters">Reset Filters</button>
+          <button type="button" class="btn btn-primary btn-block show-results" id="filters-apply">Show results</button>
+        </aside>
+
+        <div class="shop-main">
+          <div class="shop-toolbar">
+            <button type="button" class="btn btn-outline filter-toggle" id="filter-toggle" aria-controls="filters" aria-expanded="false">
+              <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M4 6h16M7 12h10M10 18h4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+              Filter <span class="filter-badge" id="filter-badge" hidden></span>
+            </button>
+            <p class="result-count" id="result-count" aria-live="polite"></p>
+            <label class="sort">
+              <span class="visually-hidden">Sort products</span>
+              <select id="sort">
+                <option value="default">Default sorting</option>
+                <option value="price-asc">Price: low to high</option>
+                <option value="price-desc">Price: high to low</option>
+                <option value="name">Name: A to Z</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="product-grid" id="product-grid" aria-busy="true"></div>
+
+          <div class="empty-state" id="empty-state" hidden>
+            <h2>No products match your search</h2>
+            <p>Try a different word or clear some categories.</p>
+            <button type="button" class="btn btn-primary" data-action="reset-filters">Reset Filters</button>
+          </div>
+
+          <div class="empty-state" id="catalog-error" role="alert" hidden>
+            <h2>We couldn't load the products</h2>
+            <p id="catalog-error-message">Please check your connection and try again.</p>
+            <button type="button" class="btn btn-primary" data-action="reload-catalog">Try again</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ======================= CHECKOUT ======================= -->
+    <section class="view" id="view-checkout" aria-labelledby="checkout-title" hidden>
+      <div class="page-title">
+        <div class="container">
+          <nav class="breadcrumb" aria-label="Breadcrumb"><a href="#shop" data-action="go-shop">Shop</a><span aria-hidden="true">/</span><span>Checkout</span></nav>
+          <h1 id="checkout-title" tabindex="-1">Checkout</h1>
+        </div>
+      </div>
+
+      <div class="container checkout-layout">
+        <aside class="order-summary" aria-labelledby="summary-title">
+          <h2 id="summary-title">Order summary</h2>
+          <div class="summary-notices" id="summary-notices" role="status"></div>
+          <table class="summary-table">
+            <thead><tr><th scope="col">Product</th><th scope="col" class="num">Qty</th><th scope="col" class="num">Price</th><th scope="col" class="num">Total</th></tr></thead>
+            <tbody id="summary-body"></tbody>
+            <tfoot>
+              <tr><th scope="row" colspan="3">Product subtotal</th><td class="num" id="summary-subtotal"></td></tr>
+            </tfoot>
+          </table>
+          <p class="muted small">Delivery costs are not included. We will confirm the final amount, including delivery, by email.</p>
+          <button type="button" class="link-button" id="edit-cart">Edit cart</button>
+        </aside>
+
+        <form class="checkout-form" id="checkout-form" novalidate>
+          <h2>Contact &amp; shipping details</h2>
+
+          <div class="field">
+            <label for="f-name">Full name <span class="req" aria-hidden="true">*</span></label>
+            <input id="f-name" name="name" type="text" autocomplete="name" maxlength="100" required aria-describedby="e-name">
+            <p class="field-error" id="e-name"></p>
+          </div>
+
+          <div class="field-row">
+            <div class="field">
+              <label for="f-phone">Phone number <span class="req" aria-hidden="true">*</span></label>
+              <input id="f-phone" name="phone" type="tel" autocomplete="tel" inputmode="tel" maxlength="25" placeholder="+353 87 123 4567" required aria-describedby="e-phone">
+              <p class="field-error" id="e-phone"></p>
+            </div>
+            <div class="field">
+              <label for="f-email">Email <span class="req" aria-hidden="true">*</span></label>
+              <input id="f-email" name="email" type="email" autocomplete="email" maxlength="254" placeholder="you@example.com" required aria-describedby="e-email">
+              <p class="field-error" id="e-email"></p>
+            </div>
+          </div>
+
+          <div class="field">
+            <label for="f-address">Shipping address <span class="req" aria-hidden="true">*</span></label>
+            <textarea id="f-address" name="address" rows="4" autocomplete="street-address" maxlength="500" placeholder="Street and number&#10;City, postcode&#10;Country" required aria-describedby="e-address"></textarea>
+            <p class="field-error" id="e-address"></p>
+          </div>
+
+          <!-- Honeypot: hidden from people, often filled in by bots. -->
+          <div class="hp" aria-hidden="true">
+            <label for="f-website">Website</label>
+            <input id="f-website" name="website" type="text" tabindex="-1" autocomplete="off">
+          </div>
+
+          <div class="alert" id="checkout-alert" role="alert" hidden></div>
+
+          <p class="payment-note">No payment required now. We will contact you via email to arrange payment and delivery.</p>
+          <button type="submit" class="btn btn-primary btn-block btn-lg" id="reserve-button">
+            <span class="spinner" aria-hidden="true"></span>
+            <span class="btn-label">Reserve Order</span>
+          </button>
+          <button type="button" class="btn btn-ghost btn-block" data-action="go-shop">Continue shopping</button>
+        </form>
+      </div>
+    </section>
+
+    <!-- ======================= THANK YOU ======================= -->
+    <section class="view" id="view-thanks" aria-labelledby="thanks-title" hidden>
+      <div class="container thanks">
+        <div class="thanks-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="40" height="40"><path d="m5 12.5 4.5 4.5L19 7.5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </div>
+        <h1 id="thanks-title" tabindex="-1">Thank You for Your Order!</h1>
+        <p class="lead">Your reservation request has been received successfully.</p>
+        <p class="order-ref">Order Reference Number: <strong id="thanks-ref">#00000</strong></p>
+        <p class="muted" id="thanks-total"></p>
+        <p>We will contact you via email to arrange payment and delivery.</p>
+        <button type="button" class="btn btn-primary btn-lg" data-action="go-shop">Continue Shopping</button>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container footer-inner">
+      <div id="about">
+        <h2 data-store-name><?= storeName ?></h2>
+        <p class="muted" id="store-tagline"></p>
+      </div>
+ <div id="contact">
+          <h2>Ordering</h2>
+        <p class="muted">Reserve your items online — no payment now. We confirm availability, payment and delivery with you by email.</p>
+      </div>
+            <!-- Filled from CONFIG.CONTACT; takes over the #contact anchor when it has entries. -->
+      <div id="contact-us" hidden>
+        <h2>Contact us</h2>
+        <ul class="contact-list" id="contact-list"></ul>
+      </div>
+    </div>
+    <div class="container footer-bottom muted small">&copy; <span id="year"></span> <span data-store-name><?= storeName ?></span></div>
+  </footer>
+
+  <!-- ======================= CART DRAWER ======================= -->
+  <div class="backdrop" id="backdrop" hidden></div>
+  <aside class="cart-drawer" id="cart-drawer" role="dialog" aria-modal="true" aria-labelledby="cart-title" hidden>
+    <div class="drawer-head">
+      <h2 id="cart-title">Your cart</h2>
+      <button type="button" class="icon-button" id="cart-close" aria-label="Close cart">&times;</button>
+    </div>
+    <div class="drawer-notices" id="cart-notices" role="status"></div>
+    <ul class="cart-items" id="cart-items"></ul>
+    <div class="cart-empty" id="cart-empty" hidden>
+      <p>Your cart is empty.</p>
+      <button type="button" class="btn btn-primary" data-action="close-cart">Continue shopping</button>
+    </div>
+    <div class="drawer-foot" id="cart-foot">
+      <div class="cart-subtotal"><span>Product subtotal</span><strong id="cart-subtotal"></strong></div>
+      <p class="muted small">Delivery is not included and will be confirmed by email.</p>
+      <button type="button" class="btn btn-primary btn-block btn-lg" id="checkout-button">Proceed to checkout</button>
+      <button type="button" class="btn btn-ghost btn-block" data-action="close-cart">Continue shopping</button>
+    </div>
+  </aside>
+
+  <!-- ======================= PRODUCT MODAL ======================= -->
+  <dialog class="modal" id="product-modal" aria-labelledby="modal-title">
+    <div class="modal-inner">
+      <button type="button" class="icon-button modal-close" id="modal-close" aria-label="Close product details">&times;</button>
+      <div class="modal-media">
+        <img id="modal-image" alt="" width="600" height="750">
+        <span class="badge badge-out" id="modal-badge" hidden>Out of Stock</span>
+      </div>
+      <form class="modal-body" id="modal-form" novalidate>
+        <p class="modal-category" id="modal-category"></p>
+        <h2 id="modal-title"></h2>
+        <p class="modal-price" id="modal-price"></p>
+        <p class="modal-description" id="modal-description"></p>
+
+        <fieldset class="field option-group">
+          <legend>Color: <strong id="modal-color-name"></strong> <span class="option-note" id="modal-color-note" hidden>Out of stock</span></legend>
+          <div class="swatches swatches-lg" id="modal-colors"></div>
+        </fieldset>
+
+        <fieldset class="field option-group">
+          <legend>Size</legend>
+          <div class="size-options" id="modal-sizes"></div>
+          <p class="field-error" id="modal-size-error" role="alert"></p>
+        </fieldset>
+
+        <div class="field">
+          <label for="modal-qty">Quantity</label>
+          <div class="qty-stepper qty-lg">
+            <button type="button" data-step="-1" aria-label="Decrease quantity">&minus;</button>
+            <input id="modal-qty" type="number" min="1" max="10" value="1" inputmode="numeric">
+            <button type="button" data-step="1" aria-label="Increase quantity">+</button>
+          </div>
+        </div>
+
+        <button type="submit" class="btn btn-primary btn-block btn-lg" id="modal-add">Add to Cart</button>
+        <p class="muted small" id="modal-stock-note" hidden></p>
+      </form>
+    </div>
+  </dialog>
+
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+  <?!= include('Logic'); ?>
+  <?!= include('Api'); ?>
+  <?!= include('Scripts'); ?>
+</body>
+</html>
+

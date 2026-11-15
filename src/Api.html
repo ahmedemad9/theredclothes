@@ -1,0 +1,82 @@
+<script>
+/**
+ * Api.html — StoreApi: the only frontend code that knows how to reach the backend.
+ *
+ * Interface (all hosts must provide the same):
+ *   StoreApi.getProducts()          → Promise<{ success, products, currency } | { success: false, message }>
+ *   StoreApi.submitOrder(orderData) → Promise<server response>
+ * Both reject with an ApiError (kind: 'network' | 'timeout') only when the server
+ * could not be reached or did not answer. A server "no" resolves with success: false.
+ *
+ * To host the frontend elsewhere (e.g. Cloudflare Pages), replace this file with
+ * migration/api-adapter-fetch.js. Nothing else in the frontend needs to change.
+ */
+var StoreApi = (function () {
+  'use strict';
+
+  function ApiError(kind, message) {
+    var err = new Error(message);
+    err.name = 'ApiError';
+    err.kind = kind;
+    return err;
+  }
+
+  /** Calls a server function through google.script.run as a Promise, with a client-side timeout. */
+  function call(fnName, arg, timeoutMs) {
+    return new Promise(function (resolve, reject) {
+      if (typeof google === 'undefined' || !google.script || !google.script.run) {
+        reject(ApiError('network', 'The store backend is not available.'));
+        return;
+      }
+      var done = false;
+      var timer = setTimeout(function () {
+        if (done) return;
+        done = true;
+        reject(ApiError('timeout', 'The server took too long to respond.'));
+      }, timeoutMs);
+      var runner = google.script.run
+        .withSuccessHandler(function (result) {
+          if (done) return;
+          done = true;
+          clearTimeout(timer);
+          if (!result || typeof result !== 'object') reject(ApiError('network', 'Unexpected server response.'));
+          else resolve(result);
+        })
+        .withFailureHandler(function (error) {
+          if (done) return;
+          done = true;
+          clearTimeout(timer);
+          reject(ApiError('network', (error && error.message) || 'Could not reach the server.'));
+        });
+      if (arg === undefined) runner[fnName]();
+      else runner[fnName](arg);
+    });
+  }
+
+  function wait(ms) {
+    return new Promise(function (resolve) { setTimeout(resolve, ms); });
+  }
+
+  /** Retries transport failures only. Server answers (even failures) are returned as-is. */
+  function withRetry(task, attempts, delayMs) {
+    return task().catch(function (err) {
+      if (attempts <= 1 || err.name !== 'ApiError') throw err;
+      return wait(delayMs).then(function () { return withRetry(task, attempts - 1, delayMs * 2); });
+    });
+  }
+
+  return {
+    getProducts: function () {
+      // Reading the catalog has no side effects, so retrying is always safe.
+      return withRetry(function () { return call('getProducts', undefined, 20000); }, 3, 800);
+    },
+    submitOrder: function (orderData) {
+      // Safe to retry only because every order carries an idempotency key: the
+      // server returns the original result instead of saving a second order.
+      var attempts = orderData && orderData.idempotencyKey ? 2 : 1;
+      return withRetry(function () { return call('submitOrder', orderData, 60000); }, attempts, 1500);
+    }
+  };
+})();
+</script>
+

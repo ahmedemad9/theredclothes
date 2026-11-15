@@ -1,0 +1,433 @@
+<script>
+/**
+ * Logic.html — StoreLogic: catalog filtering, colour/size variants, cart, money
+ * and form validation. No DOM and no Google APIs here, so it works unchanged on
+ * any host and can be unit-tested (see tests/).
+ *
+ * Product shape (from getProducts):
+ *   { id, name, description, price, category, inStock,
+ *     variants: [{ color, imageUrl, imageUrl2, sizes: { S: true, M: false, … } }] }
+ */
+var StoreLogic = (function () {
+  'use strict';
+
+  var DEFAULT_SIZES = ['S', 'M', 'L', 'XL', 'XXL'];
+
+  function categoryKey(value) {
+    return String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  }
+
+  function productKey(name) {
+    return String(name || '').trim().replace(/\s+/g, ' ').toLowerCase();
+  }
+
+  function idKey(id) {
+    return String(id == null ? '' : id).trim().toLowerCase();
+  }
+
+  var colorKey = productKey;
+
+  function toCents(amount) {
+    return Math.round(Number(amount) * 100);
+  }
+
+  function formatMoney(amount, currency, locale) {
+    currency = currency || 'EGP';
+    try {
+      return new Intl.NumberFormat(locale || 'en-EG', { style: 'currency', currency: currency }).format(toCents(amount) / 100);
+    } catch (err) {
+      return (toCents(amount) / 100).toFixed(2) + ' ' + currency;
+    }
+  }
+
+  /* ---------------- Catalog and variants ---------------- */
+
+  /** filters: { query: string, categories: string[] } — categories are combined with OR, search with AND. */
+  function filterProducts(products, filters) {
+    var query = String(filters && filters.query || '').trim().toLowerCase();
+    var terms = query ? query.split(/\s+/) : [];
+    var cats = (filters && filters.categories || []).map(categoryKey);
+    return products.filter(function (p) {
+      if (cats.length && cats.indexOf(categoryKey(p.category)) === -1) return false;
+      if (!terms.length) return true;
+      var colors = (p.variants || []).map(function (v) { return v.color; }).join(' ');
+      var haystack = (p.name + ' ' + p.description + ' ' + colors).toLowerCase();
+      return terms.every(function (t) { return haystack.indexOf(t) !== -1; });
+    });
+  }
+
+  function sortProducts(products, mode) {
+    var list = products.slice();
+    if (mode === 'price-asc') list.sort(function (a, b) { return a.price - b.price; });
+    else if (mode === 'price-desc') list.sort(function (a, b) { return b.price - a.price; });
+    else if (mode === 'name') list.sort(function (a, b) { return a.name.localeCompare(b.name); });
+    return list;
+  }
+
+  /** Finds a product by Product ID. */
+  function findProduct(products, id) {
+    var key = idKey(id);
+    for (var i = 0; i < products.length; i++) {
+      if (idKey(products[i].id) === key) return products[i];
+    }
+    return null;
+  }
+
+  function findVariant(product, color) {
+    if (!product) return null;
+    var key = colorKey(color);
+    for (var i = 0; i < product.variants.length; i++) {
+      if (colorKey(product.variants[i].color) === key) return product.variants[i];
+    }
+    return null;
+  }
+
+  function isSizeAvailable(variant, size) {
+    return !!(variant && variant.sizes && variant.sizes[size] === true);
+  }
+
+  function availableSizes(variant, sizeOrder) {
+    return (sizeOrder || DEFAULT_SIZES).filter(function (s) { return isSizeAvailable(variant, s); });
+  }
+
+  function isVariantAvailable(variant) {
+    return !!variant && Object.keys(variant.sizes || {}).some(function (s) { return variant.sizes[s] === true; });
+  }
+
+  function isPurchasable(product) {
+    return !!(product && product.variants && product.variants.some(isVariantAvailable));
+  }
+
+  /** First colour with at least one available size, otherwise the first colour. */
+  function defaultVariant(product) {
+    if (!product || !product.variants || !product.variants.length) return null;
+    for (var i = 0; i < product.variants.length; i++) {
+      if (isVariantAvailable(product.variants[i])) return product.variants[i];
+    }
+    return product.variants[0];
+  }
+
+  /* ---------------- Cart ---------------- */
+
+  function cartKey(productId, color, size) {
+    return idKey(productId) + '|' + colorKey(color) + '|' + size;
+  }
+
+  /** Stable key for any cart line (also for lines that need review). */
+  function itemKey(item) {
+    return item.needsReview ? 'review|' + productKey(item.productName) + '|' + item.size : cartKey(item.productId, item.color, item.size);
+  }
+
+  /**
+   * storage: anything with getItem/setItem/removeItem (localStorage, or a stub).
+   * Lines: { productId, productName, color, size, quantity, unitPrice, imageUrl }.
+   * Product ID + Color + Size identify a line.
+   *
+   * Carts saved by the previous version (key `legacyKey`, lines without Product ID
+   * or colour) are imported as lines with needsReview: true. reconcile() converts
+   * them only when the match is unambiguous; otherwise the customer must choose.
+   */
+  function createCart(storage, storageKey, maxQtyPerLine, legacyKey) {
+    var key = storageKey || 'store.cart.v2';
+    var maxQty = maxQtyPerLine || 10;
+    var items = load();
+    var listeners = [];
+
+    function read(k) {
+      try {
+        var raw = storage && storage.getItem(k);
+        var data = raw ? JSON.parse(raw) : null;
+        return data && Array.isArray(data.items) ? data.items : null;
+      } catch (err) {
+        return null;
+      }
+    }
+
+    function validQty(q) { return Number.isInteger(q) && q > 0; }
+
+    function load() {
+      var saved = read(key);
+      if (saved) {
+        return saved.filter(function (i) {
+          if (!i || typeof i.size !== 'string' || !validQty(i.quantity) || !isFinite(i.unitPrice)) return false;
+          if (i.needsReview) return typeof i.productName === 'string';
+          return typeof i.productId === 'string' && typeof i.color === 'string' && i.productId && i.color;
+        }).map(function (i) {
+          var line = {
+            productId: i.productId || '', productName: String(i.productName || ''), color: i.color || '',
+            size: i.size, quantity: Math.min(i.quantity, maxQty), unitPrice: Number(i.unitPrice),
+            imageUrl: typeof i.imageUrl === 'string' ? i.imageUrl : ''
+          };
+          if (i.needsReview) { line.needsReview = true; line.reviewReason = i.reviewReason || 'legacy'; }
+          return line;
+        });
+      }
+      var legacy = legacyKey ? read(legacyKey) : null;
+      if (!legacy) return [];
+      var imported = legacy.filter(function (i) {
+        return i && typeof i.name === 'string' && typeof i.size === 'string' && validQty(i.quantity) && isFinite(i.unitPrice);
+      }).map(function (i) {
+        return { productId: '', productName: i.name, color: '', size: i.size, quantity: Math.min(i.quantity, maxQty),
+          unitPrice: Number(i.unitPrice), imageUrl: '', needsReview: true, reviewReason: 'legacy' };
+      });
+      try {
+        storage.setItem(key, JSON.stringify({ items: imported, updatedAt: Date.now() }));
+        storage.removeItem(legacyKey);
+      } catch (err) { /* keep working in memory */ }
+      return imported;
+    }
+
+    function save() {
+      try {
+        if (storage) storage.setItem(key, JSON.stringify({ items: items, updatedAt: Date.now() }));
+      } catch (err) { /* storage full or blocked: the cart still works for this visit */ }
+      listeners.forEach(function (fn) { fn(); });
+    }
+
+    function indexOfKey(k) {
+      for (var i = 0; i < items.length; i++) if (itemKey(items[i]) === k) return i;
+      return -1;
+    }
+
+    return {
+      onChange: function (fn) { listeners.push(fn); },
+      items: function () { return items.map(function (i) { return Object.assign({}, i); }); },
+      maxQuantity: maxQty,
+
+      /** Returns the quantity actually added (may be less than asked when the line limit is reached). */
+      add: function (product, color, size, quantity) {
+        if (!product) throw new Error('This product is no longer available.');
+        var variant = findVariant(product, color);
+        if (!variant) throw new Error('Please select a colour.');
+        if (!isVariantAvailable(variant)) throw new Error('This colour is out of stock.');
+        if (!size) throw new Error('Please select a size.');
+        if (!isSizeAvailable(variant, size)) throw new Error('Size ' + size + ' is out of stock in ' + variant.color + '.');
+        var qty = Math.floor(Number(quantity));
+        if (!(qty >= 1)) throw new Error('Please choose a quantity.');
+        var idx = indexOfKey(cartKey(product.id, variant.color, size));
+        var current = idx === -1 ? 0 : items[idx].quantity;
+        var added = Math.min(qty, maxQty - current);
+        if (added <= 0) throw new Error('You can order at most ' + maxQty + ' of this item.');
+        if (idx === -1) {
+          items.push({ productId: product.id, productName: product.name, color: variant.color, size: size,
+            quantity: added, unitPrice: product.price, imageUrl: variant.imageUrl || '' });
+        } else {
+          items[idx].quantity += added;
+          items[idx].unitPrice = product.price;
+          items[idx].imageUrl = variant.imageUrl || '';
+        }
+        save();
+        return added;
+      },
+      setQuantity: function (lineKey, quantity) {
+        var idx = indexOfKey(lineKey);
+        if (idx === -1) return;
+        var qty = Math.floor(Number(quantity));
+        if (!(qty >= 1)) items.splice(idx, 1);
+        else items[idx].quantity = Math.min(qty, maxQty);
+        save();
+      },
+      remove: function (lineKey) {
+        var idx = indexOfKey(lineKey);
+        if (idx !== -1) { items.splice(idx, 1); save(); }
+      },
+      clear: function () { items = []; save(); },
+      /** Re-reads storage (e.g. after another tab changed the cart). */
+      reload: function () { items = load(); listeners.forEach(function (fn) { fn(); }); },
+      count: function () { return items.reduce(function (s, i) { return s + i.quantity; }, 0); },
+      /** Lines that can be ordered (excludes lines waiting for the customer's review). */
+      orderable: function () { return items.filter(function (i) { return !i.needsReview; }).map(function (i) { return Object.assign({}, i); }); },
+      needsReview: function () { return items.some(function (i) { return i.needsReview; }); },
+      subtotalCents: function () {
+        return items.reduce(function (s, i) { return i.needsReview ? s : s + toCents(i.unitPrice) * i.quantity; }, 0);
+      },
+
+      /**
+       * Brings the cart in line with the current catalog. Removes lines whose product,
+       * colour or size is no longer available, updates prices, names and images, and
+       * resolves old-format lines when exactly one product/colour matches.
+       * Returns human-readable changes (empty when nothing changed).
+       */
+      reconcile: function (products, format) {
+        var money = format || function (n) { return Number(n).toFixed(2); };
+        var changes = [];
+        var changed = false;
+        var kept = [];
+        items.forEach(function (item) {
+          var line = Object.assign({}, item);
+          if (line.needsReview) {
+            var matches = products.filter(function (p) { return productKey(p.name) === productKey(line.productName); });
+            var reason;
+            if (matches.length === 0) {
+              changes.push('"' + line.productName + '" is no longer available and was removed.');
+              changed = true;
+              return;
+            } else if (matches.length > 1) {
+              reason = 'ambiguous';
+            } else if (matches[0].variants.length !== 1) {
+              reason = 'choose-color';
+            } else {
+              line = { productId: matches[0].id, productName: matches[0].name, color: matches[0].variants[0].color,
+                size: line.size, quantity: line.quantity, unitPrice: line.unitPrice, imageUrl: matches[0].variants[0].imageUrl || '' };
+              changed = true;
+            }
+            if (reason) {
+              line.productId = matches.length === 1 ? matches[0].id : '';
+              if (reason !== item.reviewReason || line.productId !== item.productId) {
+                changes.push('"' + line.productName + '" (size ' + line.size + ') was added before colours were available — please choose a colour or remove it.');
+                changed = true;
+              }
+              line.reviewReason = reason;
+              kept.push(line);
+              return;
+            }
+          }
+          var p = findProduct(products, line.productId);
+          if (!p) { changes.push('"' + line.productName + '" is no longer available and was removed.'); changed = true; return; }
+          var v = findVariant(p, line.color);
+          if (!v) { changes.push('"' + p.name + '" in ' + line.color + ' is no longer available and was removed.'); changed = true; return; }
+          if (!isSizeAvailable(v, line.size)) {
+            changes.push('"' + p.name + '" in ' + v.color + ', size ' + line.size + ' is out of stock and was removed.');
+            changed = true;
+            return;
+          }
+          if (toCents(p.price) !== toCents(line.unitPrice)) {
+            changes.push('The price of "' + p.name + '" changed from ' + money(line.unitPrice) + ' to ' + money(p.price) + '.');
+          }
+          var next = { productId: p.id, productName: p.name, color: v.color, size: line.size,
+            quantity: line.quantity, unitPrice: p.price, imageUrl: v.imageUrl || '' };
+          if (JSON.stringify(next) !== JSON.stringify(item)) changed = true;
+          kept.push(next);
+        });
+        // Two lines can collapse into one after resolution: merge them.
+        var merged = [];
+        var seen = {};
+        kept.forEach(function (l) {
+          var k = itemKey(l);
+          if (seen[k]) { seen[k].quantity = Math.min(seen[k].quantity + l.quantity, maxQty); changed = true; }
+          else { seen[k] = l; merged.push(l); }
+        });
+        if (changed) { items = merged; save(); }
+        return changes;
+      }
+    };
+  }
+
+  /* ---------------- Checkout validation (mirrors validateCustomer_ in Orders.gs) ---------------- */
+
+  var LIMITS = {
+    NAME_MIN: 2, NAME_MAX: 100, PHONE_MAX: 25, PHONE_DIGITS_MIN: 7, PHONE_DIGITS_MAX: 15,
+    EMAIL_MAX: 254, ADDRESS_MIN: 10, ADDRESS_MAX: 500
+  };
+  var EMAIL_PATTERN = /^[A-Za-z0-9.!#$%&'*+\/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*\.[A-Za-z]{2,63}$/;
+  var PHONE_PATTERN = /^\+?[0-9 ().\-\/]+$/;
+  var LETTER = /\p{L}/u;
+
+  function cleanText(value, keepNewlines) {
+    var s = String(value == null ? '' : value).normalize('NFC');
+    s = keepNewlines
+      ? s.replace(/\r\n?/g, '\n').replace(/[\u0000-\u0009\u000B-\u001F\u007F]/g, ' ')
+      : s.replace(/[\u0000-\u001F\u007F]/g, ' ');
+    if (keepNewlines) {
+      return s.split('\n').map(function (line) { return line.replace(/[ \t]+/g, ' ').trim(); })
+        .filter(function (line) { return line; }).join('\n');
+    }
+    return s.replace(/\s+/g, ' ').trim();
+  }
+
+  function validateCustomer(raw, limits) {
+    var L = Object.assign({}, LIMITS, limits || {});
+    raw = raw || {};
+    var c = {
+      name: cleanText(raw.name),
+      phone: cleanText(raw.phone),
+      email: cleanText(raw.email).toLowerCase(),
+      address: cleanText(raw.address, true)
+    };
+    var errors = {};
+
+    if (!c.name) errors.name = 'Please enter your name.';
+    else if (c.name.length < L.NAME_MIN || c.name.length > L.NAME_MAX) errors.name = 'Name must be ' + L.NAME_MIN + '–' + L.NAME_MAX + ' characters.';
+    else if (!LETTER.test(c.name)) errors.name = 'Please enter a valid name.';
+
+    var digits = c.phone.replace(/\D/g, '');
+    if (!c.phone) errors.phone = 'Please enter your phone number.';
+    else if (c.phone.length > L.PHONE_MAX || !PHONE_PATTERN.test(c.phone) ||
+      digits.length < L.PHONE_DIGITS_MIN || digits.length > L.PHONE_DIGITS_MAX || /^(\d)\1+$/.test(digits)) {
+      errors.phone = 'Please enter a valid phone number, e.g. +353 87 123 4567.';
+    }
+
+    if (!c.email) errors.email = 'Please enter your email address.';
+    else if (c.email.length > L.EMAIL_MAX || !EMAIL_PATTERN.test(c.email) || /\.\./.test(c.email)) {
+      errors.email = 'Please enter a valid email address.';
+    }
+
+    var words = c.address.split(/[\s,]+/).filter(function (w) { return w; });
+    if (!c.address) errors.address = 'Please enter your shipping address.';
+    else if (c.address.length > L.ADDRESS_MAX) errors.address = 'Address must be under ' + L.ADDRESS_MAX + ' characters.';
+    else if (c.address.length < L.ADDRESS_MIN || words.length < 2 || !LETTER.test(c.address)) {
+      errors.address = 'Please enter your full address (street, city, postcode, country).';
+    }
+
+    return { values: c, errors: errors, valid: Object.keys(errors).length === 0 };
+  }
+
+  /* ---------------- Idempotency ---------------- */
+
+  function randomKey() {
+    var bytes = new Uint8Array(16);
+    if (typeof crypto !== 'undefined' && crypto.getRandomValues) crypto.getRandomValues(bytes);
+    else for (var i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256);
+    return Array.prototype.map.call(bytes, function (b) { return ('0' + b.toString(16)).slice(-2); }).join('');
+  }
+
+  /** Identifies "the same order": same lines and same customer details. */
+  function orderFingerprint(items, customer) {
+    var lines = items.map(function (i) { return cartKey(i.productId, i.color, i.size) + '|' + i.quantity; }).sort();
+    var c = customer || {};
+    return JSON.stringify([lines, c.name, c.phone, c.email, c.address]);
+  }
+
+  /**
+   * Returns the idempotency key for this order. Re-submitting the same order
+   * (retry, double click, reload after a lost response) reuses the stored key, so
+   * the server answers with the original order instead of creating a second one.
+   */
+  function idempotencyKeyFor(storage, storageKey, fingerprint) {
+    var saved = null;
+    try { saved = JSON.parse(storage.getItem(storageKey) || 'null'); } catch (err) { saved = null; }
+    if (saved && saved.fingerprint === fingerprint && /^[a-f0-9]{32}$/.test(saved.key)) return saved.key;
+    var key = randomKey();
+    try { storage.setItem(storageKey, JSON.stringify({ key: key, fingerprint: fingerprint })); } catch (err) { /* ignore */ }
+    return key;
+  }
+
+  return {
+    DEFAULT_SIZES: DEFAULT_SIZES,
+    categoryKey: categoryKey,
+    productKey: productKey,
+    idKey: idKey,
+    colorKey: colorKey,
+    toCents: toCents,
+    formatMoney: formatMoney,
+    filterProducts: filterProducts,
+    sortProducts: sortProducts,
+    findProduct: findProduct,
+    findVariant: findVariant,
+    isSizeAvailable: isSizeAvailable,
+    availableSizes: availableSizes,
+    isVariantAvailable: isVariantAvailable,
+    isPurchasable: isPurchasable,
+    defaultVariant: defaultVariant,
+    cartKey: cartKey,
+    itemKey: itemKey,
+    createCart: createCart,
+    cleanText: cleanText,
+    validateCustomer: validateCustomer,
+    orderFingerprint: orderFingerprint,
+    idempotencyKeyFor: idempotencyKeyFor,
+    randomKey: randomKey
+  };
+})();
+</script>
+
