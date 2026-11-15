@@ -544,6 +544,22 @@ test('webhook: doPost uses the same pipeline and enforces WEBHOOK_SECRET when se
   assertEqual(JSON.parse(doPost({ postData: { contents: JSON.stringify(validOrder({ idempotencyKey: 'webhooksecretkey1' })) } }).getContent()).code, 'UNAUTHORIZED');
   var body = validOrder({ idempotencyKey: 'webhooksecretkey2' }); body.secret = 'letmein';
   assert(JSON.parse(doPost({ postData: { contents: JSON.stringify(body) } }).getContent()).success);
+  var wrong = validOrder({ idempotencyKey: 'webhooksecretkey3' }); wrong.secret = 'letmeim';
+  assertEqual(JSON.parse(doPost({ postData: { contents: JSON.stringify(wrong) } }).getContent()).code, 'UNAUTHORIZED', 'same length, wrong secret');
+  var numeric = validOrder({ idempotencyKey: 'webhooksecretkey4' }); numeric.secret = 12345;
+  assertEqual(JSON.parse(doPost({ postData: { contents: JSON.stringify(numeric) } }).getContent()).code, 'UNAUTHORIZED');
+});
+
+test('web app: ?action=config serves only the public config, with nothing private in it', function () {
+  __mock.props = { NOTIFICATION_EMAIL: 'secret-owner@example.com', WEBHOOK_SECRET: 's3cret', SPREADSHEET_ID: 'abc' };
+  var out = doGet({ parameter: { action: 'config' } });
+  assertEqual(out.mime, 'application/json');
+  var json = JSON.parse(out.getContent());
+  assert(json.success);
+  assertEqual(json.config, JSON.parse(JSON.stringify(getPublicConfig_())));
+  ['secret-owner@example.com', 's3cret', 'SPREADSHEET_ID', 'abc"'].forEach(function (s) {
+    assert(out.getContent().indexOf(s) === -1, 'leaked ' + s);
+  });
 });
 
 test('web app: doGet serves the page, and ?action=products serves grouped JSON', function () {

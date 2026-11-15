@@ -10,6 +10,9 @@
 function doGet(e) {
   var action = e && e.parameter && e.parameter.action;
   if (action === 'products') return jsonOutput_(getProducts());
+  // Public settings for a frontend hosted elsewhere (Cloudflare Pages); the same
+  // object this page embeds below, so nothing private is exposed.
+  if (action === 'config') return jsonOutput_({ success: true, config: getPublicConfig_() });
 
   var template = HtmlService.createTemplateFromFile('Index');
   // "<" is escaped so the JSON can sit safely inside a <script> tag.
@@ -65,9 +68,10 @@ function submitOrder(orderData) {
 }
 
 /**
- * JSON webhook for external integrations (and a future static frontend).
- * Send the same body the storefront sends, as text/plain to avoid a CORS preflight:
- *   { "customer": {...}, "items": [{ "name", "size", "quantity" }], "idempotencyKey": "..." }
+ * JSON order endpoint, used server-side by the Cloudflare Pages Functions
+ * (cloudflare/functions/api/orders.js) and by other integrations. Same pipeline as
+ * submitOrder: { "customer": {...}, "items": [{ "productId", "color", "size", "quantity",
+ * "unitPrice" }], "idempotencyKey": "..." }.
  * If the WEBHOOK_SECRET script property is set, the body must also include "secret".
  */
 function doPost(e) {
@@ -78,11 +82,19 @@ function doPost(e) {
     return jsonOutput_({ success: false, code: 'INVALID_REQUEST', message: 'Request body must be JSON.' });
   }
   var secret = getProp_(PROPS.WEBHOOK_SECRET);
-  if (secret && (!body || body.secret !== secret)) {
+  if (secret && !(body && typeof body.secret === 'string' && sameSecret_(body.secret, secret))) {
     return jsonOutput_({ success: false, code: 'UNAUTHORIZED', message: 'Invalid webhook secret.' });
   }
   if (body && typeof body === 'object') delete body.secret;
   return jsonOutput_(processOrder_(body));
+}
+
+/** Compares in time that does not depend on where the strings differ. */
+function sameSecret_(given, expected) {
+  if (given.length !== expected.length) return false;
+  var diff = 0;
+  for (var i = 0; i < expected.length; i++) diff |= given.charCodeAt(i) ^ expected.charCodeAt(i);
+  return diff === 0;
 }
 
 function jsonOutput_(data) {

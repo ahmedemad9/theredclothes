@@ -1,0 +1,15 @@
+{
+  "name": "theredclothes",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node tools/build_cloudflare.mjs",
+    "dev": "wrangler dev",
+    "check": "wrangler deploy --dry-run",
+    "test": "node --test tests/cloudflare/*.test.mjs",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "4.162.0"
+  }
+}

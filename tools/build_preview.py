@@ -70,7 +70,9 @@ def svg(shape, color, back=False):
     )
 
 
-def main():
+def sample_rows():
+    """Writes the sample product images to preview/img/ and returns the Products tab rows.
+    Image links start with {{BASE}}, replaced by the page's base URL at load time."""
     shutil.rmtree(OUT / "img", ignore_errors=True)   # generated files only
     (OUT / "img").mkdir(parents=True, exist_ok=True)
     rows = [HEADER]
@@ -85,6 +87,11 @@ def main():
                 second = "{{BASE}}" + second
             rows.append([pid, name, desc, price, cat, colour, "{{BASE}}" + file, second] + stock)
     rows.append(BROKEN)
+    return rows
+
+
+def main():
+    rows = sample_rows()
 
     shutil.rmtree(OUT / "assets", ignore_errors=True)   # copied files only
     background = {}

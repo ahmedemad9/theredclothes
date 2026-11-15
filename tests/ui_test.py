@@ -5,6 +5,11 @@ Browser tests for the storefront UI: real Chromium driving the local preview
 
     python3 -m venv .venv && .venv/bin/pip install playwright && .venv/bin/python -m playwright install chromium
     .venv/bin/python tests/ui_test.py            # add --screenshots DIR to save screenshots
+    .venv/bin/python tests/ui_test.py --cloudflare   # same tests against the Cloudflare build (needs Node.js)
+
+--cloudflare builds cloudflare/public/ and serves it with tests/cloudflare/dev-server.mjs:
+the real Worker (static files + API routes) in front of the real .gs backend (mock spreadsheet, simulated
+Google redirects). The page reaches the mock sheets through test-only /__test/ routes.
 
 Covers colour bubbles, image switching, per-colour sizes, cart/checkout images,
 old-cart migration, out-of-stock handling and the full order flow.
@@ -12,8 +17,12 @@ old-cart migration, out-of-stock handling and the full order flow.
 import functools
 import http.server
 import json
+import os
 import pathlib
+import shutil
 import subprocess
+import tempfile
+import urllib.request
 import sys
 import threading
 import time
@@ -128,18 +137,26 @@ def card_bubble_switches_image_immediately_without_opening_modal(page, base):
     click_swatch(card(page, "P001"), "Green")
     check(card_image(page, "P001").endswith("P001-green.svg"), "green image")
     eq(card_image(page, "P002"), before_p002, "other cards unaffected")
-    page.wait_for_function("(() => { const i = document.querySelector('.product-card[data-card-id=p001] img');"
-                           " return i.complete && i.naturalWidth > 0 && i.src.endsWith('P001-green.svg'); })()")
+    page.wait_for_function("() => { const i = document.querySelector('.product-card[data-card-id=p001] img');"
+                           " return i.complete && i.naturalWidth > 0 && i.src.endsWith('P001-green.svg'); }")
 
 
 @test
 def card_selection_is_independent_and_survives_filtering(page, base):
+    # Categories come from Config.gs; use the sample products' categories so the test does not depend on it.
+    page.add_init_script("""Object.defineProperty(window, 'STORE_CONFIG', { configurable: true,
+        get() { return this.__cfg; }, set(v) { v.categories = ['Hoodies', 'Printed', 'Shirt']; this.__cfg = v; } });""")
     fresh(page, base)
     click_swatch(card(page, "P001"), "Green")
     click_swatch(card(page, "P002"), "White")
     check(card_image(page, "P001").endswith("green.svg") and card_image(page, "P002").endswith("white.svg"), "independent")
     page.check('#category-list input[value="Hoodies"]')
+    eq(page.eval_on_selector_all(".product-card", "els => els.map(e => e.dataset.cardId)"), ["p001"], "Hoodies only")
+    page.check('#category-list input[value="Printed"]')
+    eq(page.eval_on_selector_all(".product-card", "els => els.map(e => e.dataset.cardId)"), ["p001", "p002"], "Hoodies or Printed")
     page.uncheck('#category-list input[value="Hoodies"]')
+    page.uncheck('#category-list input[value="Printed"]')
+    eq(page.locator(".product-card").count(), 8, "all products again")
     check(card_image(page, "P001").endswith("green.svg"), "selection kept after re-render")
 
 
@@ -292,7 +309,7 @@ def stock_change_before_checkout_is_reconciled(page, base):
     page.evaluate("__preview.products().getRange(5, 9).setValue(0)")
     page.click("#cart-button")
     page.click("#checkout-button")
-    page.wait_for_function("document.querySelectorAll('#summary-body tr').length === 1")
+    page.wait_for_function("() => document.querySelectorAll('#summary-body tr').length === 1")
     check("size S is out of stock" in page.text_content("#summary-notices"), page.text_content("#summary-notices"))
 
 
@@ -314,13 +331,13 @@ def server_rejects_combination_sold_out_after_page_loaded(page, base):
     page.wait_for_selector("#checkout-alert:not([hidden])")
     check("in Blue, size M is out of stock" in page.text_content("#checkout-alert"), page.text_content("#checkout-alert"))
     eq(page.evaluate("__preview.orders().getLastRow()"), 1, "nothing saved")
-    page.wait_for_function("document.querySelectorAll('#summary-body tr').length === 0")
+    page.wait_for_function("() => document.querySelectorAll('#summary-body tr').length === 0")
 
 
 @test
 def broken_image_shows_fallback(page, base):
     fresh(page, base)
-    page.wait_for_function("document.querySelector('.product-card[data-card-id=p008] img').src.startsWith('data:image/svg')")
+    page.wait_for_function("() => document.querySelector('.product-card[data-card-id=p008] img').src.startsWith('data:image/svg')")
 
 
 @test
@@ -384,7 +401,7 @@ def background_requests(page):
 
 
 def wait_for_background(page, name):
-    page.wait_for_function(f"(document.getElementById('site-bg').dataset.bg || '').endsWith('{name}')")
+    page.wait_for_function(f"() => (document.getElementById('site-bg').dataset.bg || '').endsWith('{name}')")
 
 
 @test
@@ -469,6 +486,9 @@ def background_stays_behind_drawer_modal_and_checkout(page, base):
 
 @test
 def contact_details_hidden_when_empty_and_listed_when_set(page, base):
+    # Contact details come from Config.gs; force them empty, then set, so the test does not depend on it.
+    page.add_init_script("""Object.defineProperty(window, 'STORE_CONFIG', { configurable: true,
+        get() { return this.__cfg; }, set(v) { v.contact = {}; this.__cfg = v; } });""")
     fresh(page, base)
     check(page.is_hidden("#contact-us"), "no Contact us column without details")
     eq(page.text_content("#contact h2"), "Ordering", "menu Contact link still has a target")
@@ -535,29 +555,91 @@ def cart_uses_first_image_even_after_viewing_second(page, base):
 
 # ---------------------------------------------------------------- runner
 
+# --cloudflare: window.__preview backed by the dev server's /__test/ routes (sync XHR),
+# so the tests above run unchanged against the Cloudflare build.
+CLOUDFLARE_SHIM = """
+(function () {
+  function x(method, path, body) {
+    var r = new XMLHttpRequest();
+    r.open(method, path, false);
+    if (body) r.setRequestHeader('Content-Type', 'application/json');
+    r.send(body || null);
+    return JSON.parse(r.responseText);
+  }
+  function sheet(name) {
+    var q = 'sheet=' + encodeURIComponent(name);
+    return {
+      get cells() { return x('GET', '/__test/cells?' + q); },
+      row: function (n) { return x('GET', '/__test/row?' + q + '&row=' + n); },
+      getLastRow: function () { return x('GET', '/__test/lastRow?' + q); },
+      getRange: function (r, c) {
+        return { setValue: function (v) { x('POST', '/__test/set', JSON.stringify({ sheet: name, row: r, col: c, value: v })); } };
+      }
+    };
+  }
+  var delay = 700;
+  window.__preview = {
+    orders: function () { return sheet('Orders'); },
+    products: function () { return sheet('Products'); },
+    get delayMs() { return delay; },
+    set delayMs(v) { delay = v; x('GET', '/__test/delay?ms=' + v); }
+  };
+})();
+"""
+
+
+def start_cloudflare_server():
+    node = os.environ.get("NODE") or shutil.which("node")
+    if not node:
+        sys.exit("--cloudflare needs Node.js (set NODE=/path/to/node or put node on PATH)")
+    sys.path.insert(0, str(ROOT / "tools"))
+    import build_preview  # noqa: E402  (writes preview/img and gives the sample rows)
+    rows = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False)
+    json.dump(build_preview.sample_rows(), rows)
+    rows.close()
+    subprocess.run([node, str(ROOT / "tools/build_cloudflare.mjs")], check=True, stdout=subprocess.DEVNULL)
+    proc = subprocess.Popen([node, str(ROOT / "tests/cloudflare/dev-server.mjs"), rows.name],
+                            stdout=subprocess.PIPE, text=True)
+    line = proc.stdout.readline()
+    if not line.startswith("READY "):
+        proc.kill()
+        sys.exit("dev server did not start: " + line)
+    return proc, line.split()[1], rows.name
+
 def main():
     shots = None
     if "--screenshots" in sys.argv:
         shots = pathlib.Path(sys.argv[sys.argv.index("--screenshots") + 1])
         shots.mkdir(parents=True, exist_ok=True)
-    subprocess.run([sys.executable, str(ROOT / "tools/build_preview.py")], check=True, stdout=subprocess.DEVNULL)
-    class QuietHandler(http.server.SimpleHTTPRequestHandler):
-        def log_message(self, *args):
-            pass
+    cloudflare = "--cloudflare" in sys.argv
+    if cloudflare:
+        proc, base, rows_file = start_cloudflare_server()
+        print(f"Cloudflare build at {base} (Worker + simulated Google)")
+    else:
+        subprocess.run([sys.executable, str(ROOT / "tools/build_preview.py")], check=True, stdout=subprocess.DEVNULL)
 
-    handler = functools.partial(QuietHandler, directory=str(PREVIEW))
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    base = f"http://127.0.0.1:{server.server_address[1]}/"
+        class QuietHandler(http.server.SimpleHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+
+        handler = functools.partial(QuietHandler, directory=str(PREVIEW))
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        base = f"http://127.0.0.1:{server.server_address[1]}/"
 
     passed = failed = 0
     with sync_playwright() as p:
         browser = p.chromium.launch()
         for fn in TESTS:
             context = browser.new_context(viewport={"width": 1366, "height": 900})
+            if cloudflare:
+                urllib.request.urlopen(base + "__test/reset").read()   # fresh mock sheets per test
+                context.add_init_script(CLOUDFLARE_SHIM)
             page = context.new_page()
             errors = []
             page.on("pageerror", lambda e: errors.append(str(e)))
+            # A Content-Security-Policy block is reported on the console, not as a page error.
+            page.on("console", lambda m: errors.append(m.text) if m.type == "error" and "Content Security Policy" in m.text else None)
             try:
                 fn(page, base)
                 check(not errors, f"JavaScript errors: {errors}")
@@ -572,7 +654,11 @@ def main():
                 page.screenshot(path=str(shots / f"{fn.__name__}.png"))
             context.close()
         browser.close()
-    server.shutdown()
+    if cloudflare:
+        proc.kill()
+        os.unlink(rows_file)
+    else:
+        server.shutdown()
     print(f"\n{passed} passed, {failed} failed")
     sys.exit(1 if failed else 0)
 

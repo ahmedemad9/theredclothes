@@ -1,0 +1,27 @@
+// Cloudflare Worker for the storefront: static files + /api/* (see CLOUDFLARE.md).
+// `npx wrangler deploy` (what Cloudflare's Git build runs) first runs build.command,
+// which generates cloudflare/public/ from src/, then uploads it with the Worker.
+//
+// No custom domain or route is configured: the site is served on <name>.<account>.workers.dev.
+// Secrets (APPS_SCRIPT_URL, WEBHOOK_SECRET) are set in the dashboard or with
+// `npx wrangler secret put`, never in this file. For `wrangler dev`, use .dev.vars.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  // Must match the Worker's name in the Cloudflare dashboard.
+  "name": "theredclothes",
+  "main": "cloudflare/worker.js",
+  "compatibility_date": "2025-06-01",
+  "build": {
+    "command": "node tools/build_cloudflare.mjs"
+  },
+  "assets": {
+    "directory": "cloudflare/public",
+    "binding": "ASSETS",
+    // The API is always handled by the Worker, never looked up as a file.
+    "run_worker_first": ["/api/*"]
+  },
+  "workers_dev": true,
+  "observability": {
+    "enabled": true
+  }
+}

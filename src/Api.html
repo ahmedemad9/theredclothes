@@ -8,8 +8,8 @@
  * Both reject with an ApiError (kind: 'network' | 'timeout') only when the server
  * could not be reached or did not answer. A server "no" resolves with success: false.
  *
- * To host the frontend elsewhere (e.g. Cloudflare Pages), replace this file with
- * migration/api-adapter-fetch.js. Nothing else in the frontend needs to change.
+ * The Cloudflare build uses cloudflare/web/api.js instead (same interface, fetch to
+ * its own /api/* Worker routes). Nothing else in the frontend differs; see CLOUDFLARE.md.
  */
 var StoreApi = (function () {
   'use strict';
