@@ -566,7 +566,9 @@ def phone_swipe_switches_between_the_two_images(page, base):
         eq(modal_image(page), "P001-red-back.svg", "swipe left → image 2")
         eq(modal_thumbs(page), [["P001-red.svg", False], ["P001-red-back.svg", True]], "highlight follows the swipe")
         swipe(page, "#modal-image", -150)
-        eq(modal_image(page), "P001-red-back.svg", "already on the last image")
+        eq(modal_image(page), "P001-red.svg", "swipe left on the last image wraps around to image 1")
+        swipe(page, "#modal-image", 150)
+        eq(modal_image(page), "P001-red-back.svg", "swipe right on image 1 wraps around to image 2")
         swipe(page, "#modal-image", 150)
         eq(modal_image(page), "P001-red.svg", "swipe right → image 1")
         swipe(page, "#modal-image", -20)
@@ -580,6 +582,235 @@ def phone_swipe_switches_between_the_two_images(page, base):
         eq(modal_image(page), "P007-forest-green.svg", "nothing to swipe to without a second image")
     finally:
         phone.close()
+
+
+def lightbox_state(page):
+    return page.evaluate("""() => {
+        const box = document.getElementById('lightbox');
+        const f = document.getElementById('lightbox-frame').getBoundingClientRect();
+        const img = document.getElementById('lightbox-image');
+        const r = img.getBoundingClientRect();
+        return { open: box.open, productOpen: document.getElementById('product-modal').open,
+                 rect: { left: r.left, top: r.top, right: r.right, bottom: r.bottom, width: r.width, height: r.height },
+                 frame: { width: f.width, height: f.height }, vw: innerWidth, vh: innerHeight,
+                 img: (img.getAttribute('src') || '').split('/').pop(),
+                 transform: img.style.transform,
+                 widthPct: Math.round(f.width / innerWidth * 100), heightPct: Math.round(f.height / innerHeight * 100),
+                 blur: getComputedStyle(box, '::backdrop').backdropFilter };
+    }""")
+
+
+def settle(page):
+    """Waits until the enlarged-image layer has no running animation or transition."""
+    page.wait_for_function("""() => document.getElementById('lightbox').getAnimations({ subtree: true })
+        .every(a => a.playState !== 'running')""")
+    page.wait_for_timeout(50)
+
+
+def scale_of(state):
+    import re
+    m = re.search(r"scale\(([\d.]+)\)", state["transform"])
+    return float(m.group(1)) if m else 1.0
+
+
+@test
+def desktop_image_opens_enlarged_zooms_and_halo_returns_to_product(page, base):
+    fresh(page, base)
+    open_product(page, "P001")
+    page.click("#modal-thumbs .modal-thumb[data-image='2']")
+    page.click("#modal-image")
+    page.wait_for_selector("#lightbox[open]")
+    settle(page)
+    st = lightbox_state(page)
+    eq(st["img"], "P001-red-back.svg", "shows the image currently in the product view")
+    eq((st["widthPct"], st["heightPct"]), (70, 70), "fills 70% of the screen")
+    check("blur" in st["blur"], f"blurred surroundings: {st['blur']}")
+    check(st["productOpen"], "product view stays open underneath")
+
+    box = page.locator("#lightbox-frame").bounding_box()
+    cx, cy = box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
+    st = lightbox_state(page)
+    r = st["rect"]
+    check(r["width"] <= st["frame"]["width"] + 1 and r["height"] <= st["frame"]["height"] + 1
+          and (abs(r["width"] - st["frame"]["width"]) < 2 or abs(r["height"] - st["frame"]["height"]) < 2),
+          f"unzoomed picture fits the 70% box: {r} in {st['frame']}")
+    page.mouse.click(cx + 20, cy + 20)
+    settle(page)
+    st = lightbox_state(page)
+    eq(scale_of(st), 2.5, "click zooms in")
+    check(st["rect"]["height"] > st["frame"]["height"] + 10, f"zoomed picture grows past the 70% box: {st['rect']}")
+    page.mouse.move(cx, cy)
+    page.mouse.down()
+    page.mouse.move(cx - 80, cy - 40, steps=5)
+    page.mouse.up()
+    eq(scale_of(lightbox_state(page)), 2.5, "dragging pans without changing the zoom")
+    page.mouse.click(cx, cy)
+    settle(page)
+    eq(lightbox_state(page)["transform"], "translate(0px, 0px) scale(1)", "click again zooms out")
+    page.mouse.move(cx, cy)
+    page.mouse.wheel(0, -400)
+    settle(page)
+    check(scale_of(lightbox_state(page)) > 1.5, "mouse wheel zooms in")
+    for _ in range(6):
+        page.mouse.wheel(0, -600)
+    settle(page)
+    st = lightbox_state(page)
+    r = st["rect"]
+    check(r["left"] <= 0 and r["top"] <= 0 and r["right"] >= st["vw"] and r["bottom"] >= st["vh"],
+          f"fully zoomed picture fills the screen and is cropped by its edges: {r}")
+    page.mouse.move(cx, cy)
+    page.mouse.down()
+    page.mouse.move(cx + 3000, cy + 3000, steps=8)   # try to drag it far off
+    page.mouse.up()
+    settle(page)
+    r = lightbox_state(page)["rect"]
+    check(abs(r["left"]) < 1 and abs(r["top"]) < 1, f"dragging stops at the picture's edge, no gap: {r}")
+    page.mouse.click(cx, cy)   # zoom out
+    settle(page)
+
+    page.mouse.click(20, 450)   # the blurred halo
+    page.wait_for_selector("#lightbox:not([open])", state="attached")
+    st = lightbox_state(page)
+    check(st["productOpen"], "back to the product view")
+    eq(modal_image(page), "P001-red-back.svg", "same image as before")
+
+    page.click("#modal-image")
+    page.wait_for_selector("#lightbox[open]")
+    settle(page)
+    page.mouse.click(cx, cy)   # zoom in 2.5x; the picture is still narrower than the screen
+    settle(page)
+    r = lightbox_state(page)["rect"]
+    check(r["left"] > 30, f"zoomed but narrower than the screen: stays centred with halo beside it: {r}")
+    page.mouse.click(r["left"] - 15, cy)   # halo next to the zoomed picture
+    page.wait_for_selector("#lightbox:not([open])", state="attached")
+
+    page.focus("#modal-image")
+    page.keyboard.press("Enter")
+    page.wait_for_selector("#lightbox[open]")
+    settle(page)
+    eq(lightbox_state(page)["transform"], "translate(0px, 0px) scale(1)", "opens unzoomed")
+    page.keyboard.press("Escape")
+    page.wait_for_selector("#lightbox:not([open])", state="attached")
+    check(lightbox_state(page)["productOpen"], "Escape closes only the enlarged image")
+
+
+@test
+def phone_tap_opens_enlarged_image_pinch_zooms_and_halo_closes(page, base):
+    phone = page.context.browser.new_context(viewport={"width": 390, "height": 844}, has_touch=True, is_mobile=True)
+    try:
+        page = phone.new_page()
+        fresh(page, base)
+        open_product(page, "P001")
+        swipe(page, "#modal-image", -150)
+        page.wait_for_timeout(100)   # a quick tap right after a swipe must still register
+        check(not lightbox_state(page)["open"], "a swipe changes the image, it does not enlarge it")
+        page.tap("#modal-image")
+        page.wait_for_selector("#lightbox[open]")
+        settle(page)
+        st = lightbox_state(page)
+        eq(st["img"], "P001-red-back.svg", "the swiped-to image")
+        eq((st["widthPct"], st["heightPct"]), (70, 70), "fills 70% of the screen")
+
+        box = page.locator("#lightbox-frame").bounding_box()
+        cx, cy = box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
+        cdp = page.context.new_cdp_session(page)
+        cdp.send("Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": [{"x": cx - 20, "y": cy, "id": 1}, {"x": cx + 20, "y": cy, "id": 2}]})
+        for i in range(1, 8):
+            cdp.send("Input.dispatchTouchEvent", {"type": "touchMove", "touchPoints": [{"x": cx - 20 - 12 * i, "y": cy, "id": 1}, {"x": cx + 20 + 12 * i, "y": cy, "id": 2}]})
+        cdp.send("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []})
+        settle(page)
+        st = lightbox_state(page)
+        check(scale_of(st) > 2, f"pinch zooms in: {st['transform']}")
+        r = st["rect"]
+        check(r["width"] > st["frame"]["width"] + 10, f"zoomed picture grows past the 70% box: {r}")
+        check(r["top"] <= 0 and r["bottom"] >= st["vh"], f"and once taller than the screen it is cropped by it: {r}")
+
+        page.tap("#lightbox-close")   # the picture fills the screen; the close button stays on top
+        page.wait_for_selector("#lightbox:not([open])", state="attached")
+        check(lightbox_state(page)["productOpen"], "back to the product view")
+        page.tap("#modal-image")
+        page.wait_for_selector("#lightbox[open]")
+        settle(page)
+        page.touchscreen.tap(195, 30)   # unzoomed: the blurred halo above the picture
+        page.wait_for_selector("#lightbox:not([open])", state="attached")
+        check(lightbox_state(page)["productOpen"], "halo tap returns to the product view")
+    finally:
+        phone.close()
+
+
+def lightbox_image(page):
+    return page.get_attribute("#lightbox-image", "src").split("/").pop()
+
+
+@test
+def phone_swipes_in_enlarged_view_wrap_around_and_sync_the_product_view(page, base):
+    phone = page.context.browser.new_context(viewport={"width": 390, "height": 844}, has_touch=True, is_mobile=True)
+    try:
+        page = phone.new_page()
+        fresh(page, base)
+        open_product(page, "P001")
+        page.tap("#modal-image")
+        page.wait_for_selector("#lightbox[open]")
+        settle(page)
+        eq(lightbox_image(page), "P001-red.svg")
+        swipe(page, "#lightbox-frame", -150)
+        eq(lightbox_image(page), "P001-red-back.svg", "swipe left → image 2")
+        eq(lightbox_state(page)["transform"], "translate(0px, 0px) scale(1)", "a swipe does not zoom")
+        swipe(page, "#lightbox-frame", -150)
+        eq(lightbox_image(page), "P001-red.svg", "swipe left on the last image wraps to image 1")
+        swipe(page, "#lightbox-frame", 150)
+        eq(lightbox_image(page), "P001-red-back.svg", "swipe right on image 1 wraps to image 2")
+        swipe(page, "#lightbox-frame", -60, 200)
+        eq(lightbox_image(page), "P001-red-back.svg", "a mostly vertical drag is not a swipe")
+
+        page.tap("#lightbox-frame")   # zoom in; now a drag pans instead of switching
+        settle(page)
+        check(scale_of(lightbox_state(page)) > 1, "tap zooms")
+        swipe(page, "#lightbox-frame", -150)
+        eq(lightbox_image(page), "P001-red-back.svg", "zoomed: dragging pans, it does not switch")
+        page.tap("#lightbox-image")   # zoom back out
+        settle(page)
+        eq(lightbox_state(page)["transform"], "translate(0px, 0px) scale(1)", "tap zooms out")
+
+        page.touchscreen.tap(195, 30)   # the blurred halo
+        page.wait_for_selector("#lightbox:not([open])", state="attached")
+        eq(modal_image(page), "P001-red-back.svg", "product view shows the image last seen enlarged")
+        eq(modal_thumbs(page), [["P001-red.svg", False], ["P001-red-back.svg", True]], "thumbnail highlight synced")
+
+        page.keyboard.press("Escape")
+        page.wait_for_selector("#product-modal:not([open])", state="attached")
+        open_product(page, "P007")   # one image only
+        page.tap("#modal-image")
+        page.wait_for_selector("#lightbox[open]")
+        settle(page)
+        swipe(page, "#lightbox-frame", -150)
+        eq(lightbox_image(page), "P007-forest-green.svg", "nothing to switch to with one image")
+    finally:
+        phone.close()
+
+
+@test
+def desktop_drag_and_arrow_keys_switch_images_in_enlarged_view(page, base):
+    fresh(page, base)
+    open_product(page, "P002")
+    page.click("#modal-image")
+    page.wait_for_selector("#lightbox[open]")
+    settle(page)
+    box = page.locator("#lightbox-frame").bounding_box()
+    cx, cy = box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
+    page.mouse.move(cx + 100, cy)
+    page.mouse.down()
+    page.mouse.move(cx - 100, cy, steps=6)
+    page.mouse.up()
+    eq(lightbox_image(page), "P002-black-back.svg", "mouse drag left → next image")
+    eq(lightbox_state(page)["transform"], "translate(0px, 0px) scale(1)", "a drag-swipe does not zoom")
+    page.keyboard.press("ArrowRight")
+    eq(lightbox_image(page), "P002-black.svg", "→ on the last image wraps to the first")
+    page.keyboard.press("ArrowLeft")
+    eq(lightbox_image(page), "P002-black-back.svg", "← on the first image wraps to the last")
+    page.keyboard.press("Escape")
+    page.wait_for_selector("#lightbox:not([open])", state="attached")
+    eq(modal_image(page), "P002-black-back.svg", "product view in sync")
 
 
 @test

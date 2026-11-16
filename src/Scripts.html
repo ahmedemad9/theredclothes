@@ -640,22 +640,42 @@
 
   /* ================================================================
    * Image zoom (lightbox): the shown product image enlarged over a blurred page.
+   * Unzoomed it fits 70% of the screen; zoomed it grows up to the whole screen and,
+   * once larger, is cropped by the screen edges and can be dragged around.
    * Click/tap toggles zoom, the mouse wheel and pinch zoom gradually, drag pans
    * when zoomed. Unzoomed, a sideways swipe or drag (or the arrow keys) switches
    * images, wrapping around. Clicking outside the image (or Escape) returns to
    * the product, which then shows the same image.
    * ================================================================ */
 
-  var ZOOM_MAX = 4, ZOOM_TAP = 2.5;
-  var zoom = { scale: 1, x: 0, y: 0, pointers: {}, drag: null, pinch: null, moved: false, swipe: null };
+  var ZOOM_MAX = 5, ZOOM_TAP = 2.5;
+  var zoom = { scale: 1, x: 0, y: 0, pointers: {}, drag: null, pinch: null, moved: false, swipe: null, onImage: false };
 
   function openLightbox() {
     if (!state.current || !el.modalImage.getAttribute('src')) return;
     el.lightboxImage.src = el.modalImage.currentSrc || el.modalImage.src;
     el.lightboxImage.alt = el.modalImage.alt;
-    setZoom(1, 0, 0);
+    setZoom(1, 0, 0);   // while still hidden, so it never animates down from the last zoom
     if (typeof el.lightbox.showModal === 'function') el.lightbox.showModal();
     else el.lightbox.setAttribute('open', '');
+    fitLightboxImage();
+    setZoom(1, 0, 0);
+  }
+
+  /**
+   * Sizes the image to fit the 70% frame with its own proportions, so the element is
+   * exactly the visible picture (a zoomed image never covers the halo with empty space).
+   */
+  function fitLightboxImage() {
+    var img = el.lightboxImage;
+    var fw = el.lightboxFrame.clientWidth, fh = el.lightboxFrame.clientHeight;
+    if (!fw || !fh) return;
+    var ratio = img.naturalWidth && img.naturalHeight ? img.naturalWidth / img.naturalHeight
+      : (el.modalImage.naturalWidth && el.modalImage.naturalHeight ? el.modalImage.naturalWidth / el.modalImage.naturalHeight : 4 / 5);
+    var w = fw, h = fw / ratio;
+    if (h > fh) { h = fh; w = fh * ratio; }
+    img.style.width = Math.round(w) + 'px';
+    img.style.height = Math.round(h) + 'px';
   }
 
   /** Switches the enlarged image (and the product view behind it), sliding in from the swipe side. */
@@ -664,6 +684,7 @@
     var img = el.lightboxImage;
     img.src = el.modalImage.getAttribute('src');
     img.alt = el.modalImage.alt;
+    fitLightboxImage();
     setZoom(1, 0, 0);
     img.classList.remove('slide-next', 'slide-prev');
     void img.offsetWidth;   // restart the animation
@@ -678,8 +699,10 @@
   /** Applies a zoom level and offset, keeping the image from leaving the frame. */
   function setZoom(scale, x, y) {
     scale = Math.min(ZOOM_MAX, Math.max(1, scale));
-    var maxX = (scale - 1) * el.lightboxFrame.clientWidth / 2;
-    var maxY = (scale - 1) * el.lightboxFrame.clientHeight / 2;
+    // The image stays centred on the screen until it is wider (taller) than the screen;
+    // past that it can be moved, but never so far that a gap opens at a screen edge.
+    var maxX = Math.max(0, (el.lightboxImage.offsetWidth * scale - el.lightbox.clientWidth) / 2);
+    var maxY = Math.max(0, (el.lightboxImage.offsetHeight * scale - el.lightbox.clientHeight) / 2);
     zoom.scale = scale;
     zoom.x = scale === 1 ? 0 : Math.min(maxX, Math.max(-maxX, x));
     zoom.y = scale === 1 ? 0 : Math.min(maxY, Math.max(-maxY, y));
@@ -735,6 +758,7 @@
       try { frame.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
       if (!pointerList().length) {
         zoom.moved = false;
+        zoom.onImage = e.target === el.lightboxImage;
         // A gesture that starts unzoomed may be a swipe to the other image.
         zoom.swipe = zoom.scale === 1 ? { x: e.clientX, y: e.clientY } : null;
       }
@@ -769,8 +793,9 @@
       var swipe = zoom.swipe;
       zoom.swipe = null;
       if (e.type !== 'pointerup') return;
-      if (!zoom.moved) {   // a click or tap: toggle zoom at that point
-        if (zoom.scale > 1) setZoom(1, 0, 0);
+      if (!zoom.moved) {   // a click or tap: on the picture it toggles zoom, beside it it closes
+        if (!zoom.onImage) closeLightbox();
+        else if (zoom.scale > 1) setZoom(1, 0, 0);
         else zoomAt(ZOOM_TAP, e.clientX, e.clientY);
       } else if (swipe && zoom.scale === 1) {
         var dx = e.clientX - swipe.x, dy = e.clientY - swipe.y;
@@ -789,6 +814,12 @@
     el.lightbox.addEventListener('keydown', function (e) {
       if (e.key === 'ArrowRight') { e.preventDefault(); swipeLightbox(1); }
       else if (e.key === 'ArrowLeft') { e.preventDefault(); swipeLightbox(-1); }
+    });
+    el.lightboxImage.addEventListener('load', function () {
+      if (el.lightbox.open) { fitLightboxImage(); setZoom(zoom.scale, zoom.x, zoom.y); }
+    });
+    window.addEventListener('resize', function () {
+      if (el.lightbox.open) { fitLightboxImage(); setZoom(zoom.scale, zoom.x, zoom.y); }
     });
     el.lightbox.addEventListener('close', function () {
       zoom.pointers = {};
