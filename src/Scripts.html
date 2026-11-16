@@ -29,7 +29,7 @@
     current: null,       // product shown in the modal
     modalColor: null,
     modalSize: null,
-    modalImage: 1,       // 1 = Image Link, 2 = Image Link 2 (product page only)
+    modalImage: 1,       // position in modalImages(): 1 = Image Link, then Image Link 2 / 3 (product page only)
     resolvingKey: null,  // old-format cart line being replaced via "Choose colour"
     submitting: false,
     lastFocus: null
@@ -512,23 +512,30 @@
     (checked || $('modal-close')).focus();
   }
 
+  /** The colour's product-page images: Image Link, then Image Link 2 and 3 when set (empty ones skipped). */
+  function modalImages(v) {
+    if (!v) return [''];
+    return [v.imageUrl].concat([v.imageUrl2, v.imageUrl3].filter(function (url) { return url; }));
+  }
+
   /**
-   * The modal's main image plus, when the colour has an "Image Link 2", two
-   * thumbnails underneath: the one shown is highlighted, the other switches to it.
+   * The modal's main image plus, when the colour has more than one image, a
+   * thumbnail per image underneath: the one shown is highlighted, the others switch to it.
    */
   function renderModalImage(p, v) {
-    var second = (v && v.imageUrl2) || '';
-    if (!second) state.modalImage = 1;
-    var showSecond = state.modalImage === 2;
-    setImage(el.modalImage, showSecond ? second : v && v.imageUrl,
-      p.name + (v ? ' — ' + v.color : '') + (showSecond ? ' (image 2)' : ''));
+    var images = modalImages(v);
+    if (state.modalImage > images.length) state.modalImage = 1;
+    var n = state.modalImage;
+    setImage(el.modalImage, images[n - 1], p.name + (v ? ' — ' + v.color : '') + (n > 1 ? ' (image ' + n + ')' : ''));
     el.modalImage.setAttribute('data-color', v ? v.color : '');
-    el.modalThumbs.hidden = !second;
-    if (!second) return;
+    el.modalThumbs.hidden = images.length < 2;
+    if (images.length < 2) return;
     Array.prototype.forEach.call(el.modalThumbs.querySelectorAll('.modal-thumb'), function (thumb) {
-      var n = Number(thumb.getAttribute('data-image'));
-      setImage(thumb.querySelector('img'), n === 2 ? second : v.imageUrl, '');
-      thumb.setAttribute('aria-pressed', String(n === state.modalImage));
+      var i = Number(thumb.getAttribute('data-image'));
+      thumb.hidden = i > images.length;
+      if (thumb.hidden) return;
+      setImage(thumb.querySelector('img'), images[i - 1], '');
+      thumb.setAttribute('aria-pressed', String(i === n));
     });
   }
 
@@ -631,7 +638,7 @@
    */
   function stepModalImage(direction) {
     var v = state.current && L.findVariant(state.current, state.modalColor);
-    var count = v && v.imageUrl2 ? 2 : 1;
+    var count = modalImages(v).length;
     if (count < 2) return false;
     state.modalImage = (state.modalImage - 1 + direction + count) % count + 1;
     renderModalImage(state.current, v);

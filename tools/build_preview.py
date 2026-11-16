@@ -21,8 +21,10 @@ SRC = ROOT / "src"
 ASSETS = ROOT / "assets"
 OUT = ROOT / "preview"
 
-HEADER = ["Product ID", "Name", "Description", "Price", "Category", "Color", "Image Link", "Image Link 2", "S", "M", "L", "XL", "XXL"]
-WITH_BACK = {"P001", "P002"}   # sample products that get a second image ("Image Link 2")
+HEADER = ["Product ID", "Name", "Description", "Price", "Category", "Color", "Image Link", "Image Link 2", "Image Link 3",
+          "S", "M", "L", "XL", "XXL"]
+WITH_BACK = {"P001", "P002", "P004"}   # sample products that get a second image ("Image Link 2")
+WITH_SIDE = {"P004"}                   # ... and a third one ("Image Link 3")
 
 # (id, name, description, price, category, shape, [(colour, hex, S, M, L, XL, XXL), ...])
 SAMPLE = [
@@ -50,7 +52,7 @@ BACKGROUND = {
 }
 # A colour whose image link is broken on purpose (shows the fallback image).
 BROKEN = ["P008", "Mystery Tee", "Image link is broken on purpose (fallback demo).", 299, "Tshirts", "Purple",
-          "https://invalid.example/missing.jpg", "", 0, 1, 1, 0, 0]
+          "https://invalid.example/missing.jpg", "", "", 0, 1, 1, 0, 0]
 
 SHAPES = {
     "tee": "M120 95 L60 130 L80 190 L110 178 L110 330 L250 330 L250 178 L280 190 L300 130 L240 95 C230 118 210 130 180 130 C150 130 130 118 120 95 Z",
@@ -59,13 +61,14 @@ SHAPES = {
 }
 
 
-def svg(shape, color, back=False):
+def svg(shape, color, label=""):
+    """A sample product picture; `label` ("BACK", "SIDE") marks the extra images."""
     return (
         '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 450">'
-        f'<rect width="360" height="450" fill="{"#e4e9f0" if back else "#f3f1f4"}"/>'
+        f'<rect width="360" height="450" fill="{"#e4e9f0" if label else "#f3f1f4"}"/>'
         '<ellipse cx="180" cy="390" rx="120" ry="14" fill="#00000010"/>'
         f'<path d="{SHAPES[shape]}" transform="translate(0 20)" fill="{color}" stroke="#00000022" stroke-width="3" stroke-linejoin="round"/>'
-        + ('<text x="180" y="425" font-family="sans-serif" font-size="22" font-weight="700" text-anchor="middle" fill="#00000066">BACK</text>' if back else "")
+        + (f'<text x="180" y="425" font-family="sans-serif" font-size="22" font-weight="700" text-anchor="middle" fill="#00000066">{label}</text>' if label else "")
         + "</svg>"
     )
 
@@ -80,12 +83,15 @@ def sample_rows():
         for colour, hex_, *stock in colours:
             file = f"img/{pid}-{colour.lower().replace(' ', '-')}.svg"
             (OUT / file).write_text(svg(shape, hex_), encoding="utf-8")
-            second = ""
-            if pid in WITH_BACK:
-                second = file.replace(".svg", "-back.svg")
-                (OUT / second).write_text(svg(shape, hex_, back=True), encoding="utf-8")
-                second = "{{BASE}}" + second
-            rows.append([pid, name, desc, price, cat, colour, "{{BASE}}" + file, second] + stock)
+            extra = []
+            for label, ids in (("BACK", WITH_BACK), ("SIDE", WITH_SIDE)):
+                link = ""
+                if pid in ids:
+                    link = file.replace(".svg", f"-{label.lower()}.svg")
+                    (OUT / link).write_text(svg(shape, hex_, label), encoding="utf-8")
+                    link = "{{BASE}}" + link
+                extra.append(link)
+            rows.append([pid, name, desc, price, cat, colour, "{{BASE}}" + file] + extra + stock)
     rows.append(BROKEN)
     return rows
 

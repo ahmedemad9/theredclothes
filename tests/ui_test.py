@@ -305,8 +305,8 @@ def stock_change_before_checkout_is_reconciled(page, base):
     fresh(page, base)
     add_to_cart(page, "P002", "Black", "S", 1)
     add_to_cart(page, "P002", "Black", "M", 1)
-    # Owner sets P002 Black S to 0 (row 5 = P002 Black, column I = S).
-    page.evaluate("__preview.products().getRange(5, 9).setValue(0)")
+    # Owner sets P002 Black S to 0 (row 5 = P002 Black, column J = S).
+    page.evaluate("__preview.products().getRange(5, 10).setValue(0)")
     page.click("#cart-button")
     page.click("#checkout-button")
     page.wait_for_function("() => document.querySelectorAll('#summary-body tr').length === 1")
@@ -322,7 +322,7 @@ def server_rejects_combination_sold_out_after_page_loaded(page, base):
     page.click("#checkout-button")
     page.wait_for_selector("#view-checkout:not([hidden])")
     page.wait_for_timeout(100)
-    page.evaluate("__preview.products().getRange(3, 10).setValue(0)")   # P001 Blue M → 0 after checkout opened
+    page.evaluate("__preview.products().getRange(3, 11).setValue(0)")   # P001 Blue M → 0 after checkout opened
     page.fill("#f-name", "Jane Doe")
     page.fill("#f-phone", "+20 10 1234 5678")
     page.fill("#f-email", "jane@example.com")
@@ -510,7 +510,7 @@ def modal_thumbs(page):
     """[(image file, highlighted?)] for the popup thumbnails, or None when hidden."""
     if page.is_hidden("#modal-thumbs"):
         return None
-    return page.eval_on_selector_all("#modal-thumbs .modal-thumb", """els => els.map(b =>
+    return page.eval_on_selector_all("#modal-thumbs .modal-thumb", """els => els.filter(b => !b.hidden).map(b =>
         [b.querySelector('img').getAttribute('src').split('/').pop(), b.getAttribute('aria-pressed') === 'true'])""")
 
 
@@ -811,6 +811,67 @@ def desktop_drag_and_arrow_keys_switch_images_in_enlarged_view(page, base):
     page.keyboard.press("Escape")
     page.wait_for_selector("#lightbox:not([open])", state="attached")
     eq(modal_image(page), "P002-black-back.svg", "product view in sync")
+
+
+@test
+def three_images_thumbnails_swipes_and_enlarged_view_wrap_around(page, base):
+    fresh(page, base)
+    check(not page.locator(".product-card img[src*='-side']").count(), "main page never shows Image Link 3")
+    open_product(page, "P004")   # Heather Grey: Image Link, Image Link 2 (back), Image Link 3 (side)
+    eq(modal_thumbs(page), [["P004-heather-grey.svg", True], ["P004-heather-grey-back.svg", False],
+                            ["P004-heather-grey-side.svg", False]], "three thumbnails")
+    page.click("#modal-thumbs .modal-thumb[data-image='3']")
+    eq(modal_image(page), "P004-heather-grey-side.svg", "third image shown")
+    eq(modal_thumbs(page)[2][1], True, "third highlighted")
+
+    page.click("#modal-image")
+    page.wait_for_selector("#lightbox[open]")
+    settle(page)
+    eq(lightbox_image(page), "P004-heather-grey-side.svg", "enlarges the third image")
+    seen = []
+    for _ in range(3):
+        page.keyboard.press("ArrowRight")
+        seen.append(lightbox_image(page))
+    eq(seen, ["P004-heather-grey.svg", "P004-heather-grey-back.svg", "P004-heather-grey-side.svg"], "→ cycles 3 → 1 → 2 → 3")
+    page.keyboard.press("ArrowLeft")
+    eq(lightbox_image(page), "P004-heather-grey-back.svg", "← goes back")
+    page.keyboard.press("Escape")
+    page.wait_for_selector("#lightbox:not([open])", state="attached")
+    eq(modal_image(page), "P004-heather-grey-back.svg", "product view in sync")
+
+    click_swatch(page.locator("#modal-colors"), "Olive")
+    eq(modal_image(page), "P004-olive.svg", "new colour starts on its main image")
+    eq(len(modal_thumbs(page)), 3, "three thumbnails for this colour too")
+    page.keyboard.press("Escape")
+    page.wait_for_selector("#product-modal:not([open])", state="attached")
+    open_product(page, "P001")
+    eq(len(modal_thumbs(page)), 2, "a product with two images shows two thumbnails")
+
+
+@test
+def phone_swipes_cycle_through_three_images(page, base):
+    phone = page.context.browser.new_context(viewport={"width": 390, "height": 844}, has_touch=True, is_mobile=True)
+    try:
+        page = phone.new_page()
+        fresh(page, base)
+        open_product(page, "P004")
+        seen = []
+        for _ in range(3):
+            swipe(page, "#modal-image", -150)
+            seen.append(modal_image(page))
+        eq(seen, ["P004-heather-grey-back.svg", "P004-heather-grey-side.svg", "P004-heather-grey.svg"], "swipe left: 2, 3, then wraps to 1")
+        swipe(page, "#modal-image", 150)
+        eq(modal_image(page), "P004-heather-grey-side.svg", "swipe right on image 1 wraps to image 3")
+        page.wait_for_timeout(100)
+        page.tap("#modal-image")
+        page.wait_for_selector("#lightbox[open]")
+        settle(page)
+        swipe(page, "#lightbox-frame", -150)
+        eq(lightbox_image(page), "P004-heather-grey.svg", "enlarged: swipe left on image 3 wraps to 1")
+        swipe(page, "#lightbox-frame", 150)
+        eq(lightbox_image(page), "P004-heather-grey-side.svg", "enlarged: swipe right on 1 wraps to 3")
+    finally:
+        phone.close()
 
 
 @test

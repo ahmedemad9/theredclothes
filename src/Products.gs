@@ -14,7 +14,8 @@ var PRODUCT_COLUMNS = {
   CATEGORY: 'Category',
   COLOR: 'Color',
   IMAGE: 'Image Link',
-  IMAGE_2: 'Image Link 2'   // optional column
+  IMAGE_2: 'Image Link 2',  // optional column
+  IMAGE_3: 'Image Link 3'   // optional column
 
 };
 var SIZE_COLUMNS = ['S', 'M', 'L', 'XL', 'XXL'];
@@ -94,6 +95,7 @@ function productHeaderMap_(sheet) {
   var map = {};
   PRODUCT_HEADERS_V2.forEach(function (h) { map[h] = index[headerKey_(h)]; });
   map[PRODUCT_COLUMNS.IMAGE_2] = index[headerKey_(PRODUCT_COLUMNS.IMAGE_2)];   // undefined when the column is absent
+  map[PRODUCT_COLUMNS.IMAGE_3] = index[headerKey_(PRODUCT_COLUMNS.IMAGE_3)];
   return map;
 }
 
@@ -262,11 +264,16 @@ function buildProduct_(group, col, problems) {
     } else if (!rawImage) {
       problems.push(label + ' row ' + r.rowNumber + ' (' + r.color + '): no Image Link — placeholder shown.');
     }
-    var rawImage2 = col['Image Link 2'] === undefined ? '' : String(r.cells[col['Image Link 2']] || '').trim();
-    var imageUrl2 = normalizeImageUrl_(rawImage2);
-    if (rawImage2 && !imageUrl2) {
-      problems.push(label + ' row ' + r.rowNumber + ' (' + r.color + '): Image Link 2 is not a valid http(s) URL — second image skipped.');
-    }
+    var extraImage = function (header, which) {
+      var raw = col[header] === undefined ? '' : String(r.cells[col[header]] || '').trim();
+      var url = normalizeImageUrl_(raw);
+      if (raw && !url) {
+        problems.push(label + ' row ' + r.rowNumber + ' (' + r.color + '): ' + header + ' is not a valid http(s) URL — ' + which + ' image skipped.');
+      }
+      return url;
+    };
+    var imageUrl2 = extraImage(PRODUCT_COLUMNS.IMAGE_2, 'second');
+    var imageUrl3 = extraImage(PRODUCT_COLUMNS.IMAGE_3, 'third');
     var sizes = {};
     SIZE_COLUMNS.forEach(function (s) {
       var parsed = parseStockCell_(r.cells[col[s]]);
@@ -276,7 +283,7 @@ function buildProduct_(group, col, problems) {
       }
       sizes[s] = parsed.available;
     });
-    variants.push({ color: r.color, imageUrl: imageUrl, imageUrl2: imageUrl2, sizes: sizes });
+    variants.push({ color: r.color, imageUrl: imageUrl, imageUrl2: imageUrl2, imageUrl3: imageUrl3, sizes: sizes });
   });
 
   if (!variants.length) {

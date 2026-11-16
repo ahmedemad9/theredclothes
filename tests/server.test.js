@@ -58,7 +58,7 @@ test('products: rows sharing a Product ID become one product with colour variant
   assertEqual(hoodie.price, 29.99);
   assertEqual(hoodie.category, 'Hoodies');
   assertEqual(hoodie.variants.map(function (v) { return v.color; }), ['Red', 'Blue', 'Green']);
-  assertEqual(hoodie.variants[0], { color: 'Red', imageUrl: 'https://example.com/red.jpg', imageUrl2: '',
+  assertEqual(hoodie.variants[0], { color: 'Red', imageUrl: 'https://example.com/red.jpg', imageUrl2: '', imageUrl3: '',
     sizes: { S: true, M: true, L: false, XL: false, XXL: true } });
   assertEqual(hoodie.variants[2].sizes, { S: false, M: false, L: true, XL: true, XXL: false });
   assertEqual(res.sizes, ['S', 'M', 'L', 'XL', 'XXL']);
@@ -669,4 +669,22 @@ test('products: optional "Image Link 2" column — per colour, Drive links conve
   assertEqual(v[0].sizes, { S: true, M: true, L: true, XL: true, XXL: true }, 'size columns still found after the extra column');
   assert(report.problems.join('\n').indexOf('Image Link 2 is not a valid') !== -1, report.problems.join('\n'));
   assertEqual(report.problems.length, 1, 'an empty Image Link 2 is not a problem');
+});
+
+test('products: optional "Image Link 3" column — per colour, independent of Image Link 2, invalid skipped and reported', function () {
+  var header = HEADER.slice(0, 7).concat(['Image Link 2', 'Image Link 3']).concat(HEADER.slice(7));
+  freshStore([], [header,
+    ['P001', 'Hoodie', 'Warm', 10, 'Hoodies', 'Red', 'https://e.com/red.jpg', 'https://e.com/red-back.jpg', 'https://e.com/red-side.jpg', 1, 1, 1, 1, 1],
+    ['P001', 'Hoodie', 'Warm', 10, 'Hoodies', 'Blue', 'https://e.com/blue.jpg', '', 'https://e.com/blue-side.jpg', 1, 0, 0, 0, 0],
+    ['P001', 'Hoodie', 'Warm', 10, 'Hoodies', 'Green', 'https://e.com/green.jpg', '', 'not a link', 1, 0, 0, 0, 0]]);
+  var v = getProducts().products[0].variants;
+  assertEqual(v.map(function (x) { return [x.imageUrl2, x.imageUrl3]; }),
+    [['https://e.com/red-back.jpg', 'https://e.com/red-side.jpg'], ['', 'https://e.com/blue-side.jpg'], ['', '']]);
+  var report = readCatalog_();
+  assert(report.problems.join('\n').indexOf('Image Link 3 is not a valid http(s) URL — third image skipped') !== -1, report.problems.join('\n'));
+  assertEqual(report.problems.length, 1);
+
+  // Without the column (old sheets), imageUrl3 is just empty.
+  freshStore();
+  assertEqual(getProducts().products[0].variants[0].imageUrl3, '');
 });
